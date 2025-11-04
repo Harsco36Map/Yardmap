@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interactive Scrap Metal Map</title>
+
+<!-- Leaflet base -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<style>
+html, body { height: 100%; margin: 0; padding: 0; }
+#map { width: 100%; height: 100%; }
+
+/* Layer panel style */
+.leaflet-control-layers {
+    background-color: rgba(209, 210, 223, 0.95);
+    border: 1px solid #000;
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+}
+.leaflet-control-layers label { display: block; margin-bottom: 6px; cursor: pointer; }
+.leaflet-control-layers input[type="checkbox"] { margin-right: 6px; transform: scale(1.2); }
+.leaflet-control-layers-base { display: none; }
+
+/* Custom layer toggle icon */
+.leaflet-control-layers-toggle {
+    background: url('icons/harsco.png') no-repeat center center !important;
+    background-size: 20px 20px !important;
+    width: 30px !important;
+    height: 30px !important;
+}
+
+/* Fade buttons */
+.fade-btn {
+    position: absolute;
+    z-index: 1000;
+    background-color: rgba(209,210,223,0.95);
+    border: 1px solid #000;
+    border-radius: 6px;
+    padding: 0;
+    font-family: Arial, sans-serif;
+    font-size: 18px;
+    line-height: 1;
+    text-align: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.3s, background-color 0.2s, left 0.3s cubic-bezier(0.25, 1.5, 0.5, 1);
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.fade-btn:hover { background-color: rgba(180,180,200,0.95); }
+
+.check { color: green; font-size: 18px; }
+.cross { color: red; font-size: 18px; }
+
+.leaflet-control-layers-overlays {
+    column-count: 2;
+    column-gap: 15px;
+}
+.leaflet-control-layers-overlays label {
+    display: block;
+    break-inside: avoid;
+    margin-bottom: 4px;
+}
+
+/* Context Menu */
+#contextMenu {
+  display: none;
+  position: absolute;
+  z-index: 2000;
+  background: rgba(34, 34, 34, 0.95);
+  color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  font-family: Arial, sans-serif;
+  font-size: 14px;
+}
+#contextMenu ul {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+}
+#contextMenu li {
+  padding: 6px 12px;
+  cursor: pointer;
+}
+#contextMenu li:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<script>
+var map = L.map('map', {
+    center: [40.793903, -82.536906],
+    zoom: 18,
+    minZoom: 18,
+    maxZoom: 21
+});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+L.imageOverlay('Scrapyard.png', [
+    [40.79156379934851, -82.54114438096362],
+    [40.79571031220616, -82.5323681932691]
+]).addTo(map);
+
+// ========================
+// === CUSTOM ICON SETS ===
+// ========================
+const iconst181 = L.icon({ iconUrl: 'icons/st181.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconst430 = L.icon({ iconUrl: 'icons/st430.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconst435 = L.icon({ iconUrl: 'icons/st435.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconst436 = L.icon({ iconUrl: 'icons/st436.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconnickel409 = L.icon({ iconUrl: 'icons/nickel409.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconcc409 = L.icon({ iconUrl: 'icons/cc409.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconst409 = L.icon({ iconUrl: 'icons/st409.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconblend181 = L.icon({ iconUrl: 'icons/blend181.png', iconSize: [80,80], iconAnchor:[32,32], popupAnchor:[0,-10] });
+const iconblend430 = L.icon({ iconUrl: 'icons/blend430.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconHome = L.icon({ iconUrl: 'icons/Home.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconTundish = L.icon({ iconUrl: 'icons/Tundish.png', iconSize: [128,128], iconAnchor:[64,64], popupAnchor:[0,-10] });
+const iconReclaim = L.icon({ iconUrl: 'icons/Reclaim.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconMtown = L.icon({ iconUrl: 'icons/Mtown.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconHBI = L.icon({ iconUrl: 'icons/HBI.png', iconSize: [128,128], iconAnchor:[64,64], popupAnchor:[0,-10] });
+const iconFrag = L.icon({ iconUrl: 'icons/Frag.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+const iconAlloys = L.icon({ iconUrl: 'icons/Alloys.png', iconSize: [32,32], iconAnchor:[16,16], popupAnchor:[0,-10] });
+const iconOther = L.icon({ iconUrl: 'icons/Other.png', iconSize: [96,96], iconAnchor:[48,48], popupAnchor:[0,-10] });
+
+const markerConfig = {
+    "st181": { icon: iconst181, displayName: "181 Stainless" },
+    "st430": { icon: iconst430, displayName: "430 Stainless" },
+    "st435": { icon: iconst435, displayName: "435 Stainless" },
+    "st436": { icon: iconst436, displayName: "436 Stainless" },
+    "nickel409": { icon: iconnickel409, displayName: "409 Nickel" },
+    "cc409": { icon: iconcc409, displayName: "409 Converters" },
+    "st409": { icon: iconst409, displayName: "409 Scrap" },
+    "blend181": { icon: iconblend181, displayName: "181 Blend" },
+    "blend430": { icon: iconblend430, displayName: "430 Blend" },
+    "Home": { icon: iconHome, displayName: "Home" },
+    "Tundish": { icon: iconTundish, displayName: "Tundish" },
+    "Reclaim": { icon: iconReclaim, displayName: "Reclaim" },
+    "Mtown": { icon: iconMtown, displayName: "Middletown" },
+    "HBI": { icon: iconHBI, displayName: "Hot Briq Iron" },
+    "Frag": { icon: iconFrag, displayName: "Fragmented Scrap" },
+    "Alloys": { icon: iconAlloys, displayName: "Alloys" },
+    "Other": { icon: iconOther, displayName: "Other" }
+};
+Object.keys(markerConfig).forEach(type => markerConfig[type].layer = L.layerGroup().addTo(map));
+
+// ==============================
+// === Pile Marker Popups ====
+// ==============================
+function createMarkerPopup(marker) {
+    const displayName = markerConfig[marker.type]?.displayName || marker.type;
+
+    return `
+        <div class="popup-container" style="font-family:Arial,sans-serif;min-width:200px;">
+            <!-- Header section -->
+            <div class="popup-header" style="margin-bottom:6px;">
+                <h4 class="popup-title" style="margin:0;color:#0078ff;">${marker.name}</h4>
+                <div class="popup-subtitle" style="font-size:12px;color:#333;">
+                    <b>${displayName}</b>
+                </div>
+            </div>
+
+            <!-- Details table -->
+            <div class="popup-details">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <tr class="popup-row popup-coords">
+                        <td style="color:#555;">Coords:</td>
+                        <td>
+                            <span
+                                class="popup-coord-text"
+                                style="color:#0078ff;cursor:pointer;text-decoration:underline;position:relative;display:inline-block;"
+                                onclick="(async (el) => {
+                                    await navigator.clipboard.writeText('${marker.lat},${marker.lng}');
+                                    
+                                    // Tooltip styled like your panels
+                                    const tip = document.createElement('div');
+                                    tip.textContent = '📋 Copied!';
+                                    Object.assign(tip.style, {
+                                        position: 'absolute',
+                                        left: '50%',
+                                        top: '-24px',
+                                        transform: 'translateX(-50%)',
+                                        background: 'rgba(209,210,223,0.95)',
+                                        color: '#111',
+                                        padding: '3px 8px',
+                                        fontSize: '12px',
+                                        border: '1px solid #000',
+                                        borderRadius: '6px',
+                                        boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+                                        pointerEvents: 'none',
+                                        opacity: '1',
+                                        transition: 'opacity 0.4s ease',
+                                        zIndex: '9999'
+                                    });
+                                    el.appendChild(tip);
+
+                                    // Fade out & remove
+                                    setTimeout(() => { tip.style.opacity = '0'; }, 600);
+                                    setTimeout(() => tip.remove(), 1000);
+                                })(this)">
+                                ${marker.lat.toFixed(5)}, ${marker.lng.toFixed(5)}
+                            </span>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- Future expansion area -->
+            <div class="popup-footer" style="margin-top:6px;font-size:12px;color:#555;display:none;">
+                <!-- Example: <span>Status: Active</span> -->
+            </div>
+        </div>
+    `;
+}
+
+// ==========================
+// === LOAD MARKERS.JSON ====
+// ==========================
+fetch('markers.json')
+    .then(res => res.json())
+    .then(data => {
+        const unknownTypes = new Set();
+        data.forEach(marker => {
+            const config = markerConfig[marker.type];
+            if (!config) { unknownTypes.add(marker.type); return; }
+            const leafletMarker = L.marker([marker.lat, marker.lng], { icon: config.icon })
+                .bindPopup(createMarkerPopup(marker));
+            config.layer.addLayer(leafletMarker);
+        });
+        if(unknownTypes.size>0){ console.warn("Unknown marker types:", Array.from(unknownTypes)); }
+    })
+    .catch(err => console.error("Error loading markers.json:", err));
+
+// ==============================
+// === Image/Yard Border ===
+// ==============================
+const yardBounds = [
+    [40.79156379934851, -82.54114438096362],
+    [40.79571031220616, -82.5323681932691]
+];
+const yardBorder = L.rectangle(yardBounds, {
+    color: "#ffcc00",
+    weight: 10,
+    opacity: 0.9,
+    fill: false
+}).addTo(map);
+const outside = L.geoJSON({
+    type: "FeatureCollection",
+    features: [{
+        type: "Feature",
+        geometry: {
+            type: "Polygon",
+            coordinates: [[
+                [-180, -90], [180, -90], [180, 90], [-180, 90], [-180, -90],
+                [yardBounds[0][1], yardBounds[0][0]],
+                [yardBounds[0][1], yardBounds[1][0]],
+                [yardBounds[1][1], yardBounds[1][0]],
+                [yardBounds[1][1], yardBounds[0][0]],
+                [yardBounds[0][1], yardBounds[0][0]]
+            ]]
+        }
+    }]
+}, {
+    style: { color: "#000", fillColor: "rgba(0,0,0,0.55)", fillOpacity: 0.6, weight: 0 }
+}).addTo(map);
+
+const overlayMaps = {};
+Object.values(markerConfig).forEach(cfg => overlayMaps[cfg.displayName] = cfg.layer);
+const layerControl = L.control.layers(null, overlayMaps, { collapsed: true, position: 'bottomleft' }).addTo(map);
+</script>
+</body>
+</html>
