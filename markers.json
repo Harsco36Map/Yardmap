@@ -71,7 +71,6 @@
   {"type":"Other","name":"17B Broken Rolls Old","lat":40.79328583772271,"lng":-82.53572747111322},
   {"type":"Other","name":"17W Baghouse Filter Frames","lat":40.795085992711584,"lng":-82.53576010236156},
   {"type":"Other","name":"134","lat":40.79415900044157,"lng":-82.53836005926134},
-  {"type":"Other","name":"41B Bscrap","lat":40.79367063991754,"lng":-82.53599971532823,"cell":"LC1"},{"type":"Other","name":"41B Bscrap Remote","lat":40.79438236580418,"lng":-82.53591522574426},
   {"type":"Other","name":"736","lat":40.79304176504606,"lng":-82.5359980013706},
   {"type":"Other","name":"931","lat":40.79333355737725,"lng":-82.53572143614294},
   {"type":"Other","name":"17F Delta Rings","lat":40.79379958368974,"lng":-82.53859207034112},
@@ -112,6 +111,7 @@
   {"type":"Coils","name":"95C 436 Home"},
   {"type":"Coils","name":"95J 446 Home"},
 {"type":"Tundish","name":"EVCt","lat":40.793921172124534,"lng":-82.53828533805394},{"type":"Reclaim","name":"EVCrc","lat":40.793813713003665,"lng":-82.53804611041147},{"type":"Other","name":"Rejected 430 #H77977","lat":40.79406863878592,"lng":-82.53815352916719},{"type":"Other","name":"958","lat":40.79576569549429,"lng":-82.54109946712252},{"type":"Other","name":"132","lat":40.79574887999851,"lng":-82.54087905512321}]
+
 
 
 
