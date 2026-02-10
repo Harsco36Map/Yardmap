@@ -6,6 +6,7 @@ Builds StockData.json from daily inventory report, populates data for individual
 
 -BreakingCalculator
 Builds BreakingTotals.csv out of existing unprepared scrap transfer logs (STILL NEEDS DEVELOPED ALONGSIDE BREAKINGTOTALS.CSV FORMAT)
+Breaking panel showing "download CSV" option, "total processed" showing on panel button
 
 -Consumption
 LoadedBaskets ran daily for consumption data, daily tons loaded into baskets
