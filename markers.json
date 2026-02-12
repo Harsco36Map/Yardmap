@@ -67,7 +67,7 @@
   {"type":"Other","name":"175 Pitscrap","lat":40.79385847131344,"lng":-82.53558129072191,"cell":"LC1"},{"type":"Other","name":"175 Pitscrap Remote","lat":40.79344524154104,"lng":-82.53716848790647},
   {"type":"Other","name":"17G Aod chutes","lat":40.79279180153046,"lng":-82.53560706998876},
   {"type":"Other","name":"17V RocketTops","lat":40.79337163154509,"lng":-82.53710880875589},
-  {"type":"Other","name":"17R Broken Rolls New","lat":40.79327091548683,"lng":-82.53566541397608},
+  {"type":"Other","name":"17R Broken Rolls New","lat":40.79356426474464,"lng":-82.53792821521412},
   {"type":"Other","name":"17B Broken Rolls Old","lat":40.79328583772271,"lng":-82.53572747111322},
   {"type":"Other","name":"17W Baghouse Filter Frames","lat":40.795085992711584,"lng":-82.53576010236156},
   {"type":"Other","name":"134","lat":40.79415900044157,"lng":-82.53836005926134},
@@ -111,6 +111,7 @@
   {"type":"Coils","name":"95C 436 Home"},
   {"type":"Coils","name":"95J 446 Home"},
 {"type":"Tundish","name":"EVCt","lat":40.793921172124534,"lng":-82.53828533805394},{"type":"Reclaim","name":"EVCrc","lat":40.793813713003665,"lng":-82.53804611041147},{"type":"Other","name":"Rejected 430 #H77977","lat":40.79406863878592,"lng":-82.53815352916719},{"type":"Other","name":"958","lat":40.79576569549429,"lng":-82.54109946712252},{"type":"Other","name":"132","lat":40.79574887999851,"lng":-82.54087905512321}]
+
 
 
 
