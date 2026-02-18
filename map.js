@@ -68,26 +68,6 @@ const markerConfig = {
 Object.keys(markerConfig).forEach(type =>
   markerConfig[type].layer = L.layerGroup().addTo(map)
 );
-
-// Custom bottom container for nested panels
-const bottomContainer = L.control({ position: 'bottomright' });
-
-bottomContainer.onAdd = function () {
-    const div = L.DomUtil.create('div');
-    div.id = 'bottomPanelContainer';
-    Object.assign(div.style, {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '10px',
-        margin: '10px',
-        width: 'auto',
-        justifyContent: 'flex-end',
-        alignItems: 'flex-end',
-        pointerEvents: 'none'   // allow map to receive clicks except on panels
-    });
-    return div;
-};
-bottomContainer.addTo(map);
  
 // ===== Simple accordion coordinator for the two panels =====
 window.yardPanels = window.yardPanels || {};
@@ -1076,7 +1056,7 @@ function isPastDueExempt(marker, stockIndex) {
   /* ===================================================================
    Toggleable Past Due Panel
   =================================================================== */
-  const pastDueCtrl = L.control({ position: 'bottomleft' });
+  const pastDueCtrl = L.control({ position: 'bottomright' });
   pastDueCtrl.onAdd = function () {
     const div = L.DomUtil.create('div'); 
     L.DomEvent.disableScrollPropagation(div);
@@ -1478,19 +1458,14 @@ ${sheetData}
     });
     div.appendChild(headerEl);
     div.appendChild(bodyEl);
-    setTimeout(() => {
-     document.getElementById('bottomPanelContainer').appendChild(div);
-     // register with accordion after it's in the DOM
      registerPanel('pastDuePanel', { isExpanded, expand, collapse });
-    }, 0);
     return div;
   };
-  pastDueCtrl.addTo(map);
 
   /* ===================================================================
    Search Panel
   =================================================================== */
-  const searchCtrl = L.control({ position: 'bottomleft' });
+  const searchCtrl = L.control({ position: 'bottomright' });
   searchCtrl.onAdd = function () {
     const div = L.DomUtil.create('div');
     L.DomEvent.disableScrollPropagation(div);
@@ -1633,21 +1608,12 @@ ${sheetData}
 
     div.appendChild(headerEl);
     div.appendChild(bodyEl);
-    setTimeout(() => {
-     const c = document.getElementById('bottomPanelContainer');
-     if (c && c.firstChild) {
-       c.prepend(div); // ensure Search is on top
-     } else if (c) {
-       c.appendChild(div);
-     }
-     // register with accordion after it's in the DOM
      registerPanel('searchPanel', { isExpanded, expand, collapse });
-    }, 0);
     return div;
   };
-  searchCtrl.addTo(map);
-
-  if (unknownTypes.size) console.warn('Unknown types:', Array.from(unknownTypes));
+    searchCtrl.addTo(map);
+    pastDueCtrl.addTo(map);
+    if (unknownTypes.size) console.warn('Unknown types:', Array.from(unknownTypes));
 }).catch(err => console.error('Data load failed:', err));
 
 /* ===================================================================
