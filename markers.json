@@ -74,6 +74,7 @@
   {"type":"Other","name":"931","lat":40.79333355737725,"lng":-82.53572143614294},
   {"type":"Other","name":"17F Delta Rings","lat":40.79379958368974,"lng":-82.53859207034112},
   {"type":"Other","name":"17K Steel Pallets","lat":40.79362088989123,"lng":-82.53814280033113},
+  {"type":"Other","name":"41B Bscrap","lat":40.79435283107941,"lng":-82.53591053609696},
 {"type":"Breaking","name":"26U 435 Home"},
   {"type":"Breaking","name":"38U 439 Home"},
   {"type":"Breaking","name":"51U 430 Home"},
@@ -110,6 +111,7 @@
   {"type":"Coils","name":"95C 436 Home"},
   {"type":"Coils","name":"95J 446 Home"},
 {"type":"Tundish","name":"EVCt","lat":40.793921172124534,"lng":-82.53828533805394},{"type":"Reclaim","name":"EVCrc","lat":40.793813713003665,"lng":-82.53804611041147},{"type":"Other","name":"Rejected 430 #H77977","lat":40.79406863878592,"lng":-82.53815352916719},{"type":"Other","name":"958","lat":40.79576569549429,"lng":-82.54109946712252},{"type":"Other","name":"132","lat":40.79574887999851,"lng":-82.54087905512321}]
+
 
 
 
