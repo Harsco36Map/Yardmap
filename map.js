@@ -294,6 +294,7 @@ async function fetchBreakingTotals(force = false) {
   if (!force && breakingCache.data && (now - breakingCache.at) < 120000) {
     return breakingCache.data;
   }
+
   const res = await fetch(breakingCsvUrl, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Failed to fetch ${breakingCsvUrl}: ${res.status}`);
 
@@ -301,35 +302,50 @@ async function fetchBreakingTotals(force = false) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (!lines.length) throw new Error('BreakingTotals.csv is empty.');
 
+  // Expected CSV (from your generator):
+  // DATE,COMMODITY,NET,NET TONS,FROM PILE #,TO PILE #
+  // idx:   0       1       2    3         4           5
+
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
     const p = lines[i].split(',');
-    if (p.length < 5) continue;
+    if (p.length < 6) continue;
 
     const dateStr = (p[0] || '').trim();
     if (!dateStr) continue;
     const dt = new Date(dateStr);
     if (!isFinite(dt.getTime())) continue;
 
-    const num = v => {
+    const num = (v) => {
       const x = Number((v || '').trim());
       return Number.isFinite(x) ? x : null;
     };
 
-    const from = (p[2] || '').trim();
-    const to = (p[3] || '').trim();
-    const netTons = num(p[4]);
-    const material = (p[7] || '').trim(); // optional; use if present
+    const material = (p[1] || '').trim();   // COMMODITY
+    const netLbs   = num(p[2]);             // NET (lbs)
+    const netTons  = num(p[3]);             // NET TONS
+    const from     = (p[4] || '').trim();   // FROM PILE #
+    const to       = (p[5] || '').trim();   // TO PILE #
 
-    rows.push({ date: dt, dateLabel: dateStr, from, to, netTons, material });
+    rows.push({
+      date: dt,
+      dateLabel: dateStr,
+      from,
+      to,
+      netTons,
+      netLbs,
+      material
+    });
   }
 
-  rows.sort((a,b) => b.date - a.date);
+  // newest first
+  rows.sort((a, b) => b.date - a.date);
 
-  // Summaries
+  // Month summary (current month)
   const nowD = new Date();
   const Y = nowD.getFullYear(), M = nowD.getMonth();
   const monthRows = rows.filter(r => r.date.getFullYear() === Y && r.date.getMonth() === M);
+
   const totalMonthTons = monthRows.reduce((a, r) => a + (r.netTons || 0), 0);
   const materialsTouched = Array.from(new Set(
     monthRows.map(r => (r.material || '').trim()).filter(Boolean)
@@ -339,7 +355,7 @@ async function fetchBreakingTotals(force = false) {
     rows,
     month: {
       year: Y,
-      monthIndex: M, // 0..11
+      monthIndex: M,
       totalMonthTons,
       materialsTouched,
       rowCount: monthRows.length
@@ -348,6 +364,7 @@ async function fetchBreakingTotals(force = false) {
   breakingCache = { at: now, data: payload };
   return payload;
 }
+``
 
 // 4) Popup rendering
 
@@ -470,7 +487,7 @@ function renderBreakingPopup(payload, markers, stockIndex) {
         <tr style="background:#f2f2f2">
           <th style="text-align:left;padding:2px 6px">Date</th>
           <th style="text-align:left;padding:2px 6px">From → To</th>
-          <th style="text-align:right;padding:2px 6px">NetTons</th>
+          <th style="text-align:right;padding:2px 6px">Net Tons</th>
           <th style="text-align:left;padding:2px 6px">Material</th>
         </tr>
       </thead>
