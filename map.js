@@ -212,6 +212,51 @@ function fmtInt(n)  { return (typeof n === 'number' && isFinite(n)) ? Math.round
 function fmtTons(n, d = 3) { return (typeof n === 'number' && isFinite(n)) ? n.toFixed(d) : '—'; }
 function fmtTons2(n, d = 2) { return (typeof n === 'number' && isFinite(n)) ? n.toFixed(d) : '—'; }
 
+// ===================== GLOBAL HELPERS (must be above builders) =====================
+
+// Leading alphanumerics (e.g., "62U" from "62U Unbreakable")
+function extractPileCode(name) {
+  if (!name) return null;
+  const m = String(name).match(/^[A-Za-z0-9]+/);
+  return m ? m[0] : null;
+}
+
+// MM/DD/YYYY → Date
+function parseMDY(dateStr) {
+  if (!dateStr) return null;
+  const parts = String(dateStr).split('/');
+  if (parts.length !== 3) return null;
+  const m = parseInt(parts[0], 10);
+  const d = parseInt(parts[1], 10);
+  const y = parseInt(parts[2], 10);
+  if (!m || !d || !y) return null;
+  return new Date(y, m - 1, d);
+}
+
+// Full months difference (a → b)
+function monthsDiff(a, b) {
+  const years = b.getFullYear() - a.getFullYear();
+  const months = years * 12 + (b.getMonth() - a.getMonth());
+  return (b.getDate() >= a.getDate()) ? months : months - 1;
+}
+
+// Last-zero color policy (kept exactly as your current behavior)
+function lastZeroColor(dateStr) {
+  const dt = parseMDY(dateStr);
+  if (!dt) return '';
+  const now = new Date();
+  const m = monthsDiff(dt, now);
+  if (m > 6) return 'color:#c62828; font-weight:700;'; // red + bold
+  if (m > 3) return 'color:#f9a825; font-weight:700;'; // yellow + bold
+  return '';
+}
+
+// Bold red when inventory <= 0  (used by Breaking & Burning)
+function invAlertStyle(weightLbs) {
+  const v = (typeof weightLbs === 'number') ? weightLbs : Number(weightLbs || 0);
+  return (Number.isFinite(v) && v <= 0) ? 'color:#c62828;font-weight:700;' : '';
+}
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g,'&amp;')
@@ -302,51 +347,65 @@ async function fetchBreakingTotals(force = false) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (!lines.length) throw new Error('BreakingTotals.csv is empty.');
 
-  // Expected CSV (from your generator):
+  // CSV layout per your generator:
   // DATE,COMMODITY,NET,NET TONS,FROM PILE #,TO PILE #
-  // idx:   0       1       2    3         4           5
+  // ... detail rows ...
+  // ,TOTAL LBS,<sum_lbs>,,,
+  // ,TOTAL NET TONS,,<sum_tons>,,,
 
   const rows = [];
+  const toNum = (v) => {
+    const x = Number((v || '').trim());
+    return Number.isFinite(x) ? x : null;
+  };
+
+  // Parse detail lines (skip header, skip the totals lines)
   for (let i = 1; i < lines.length; i++) {
     const p = lines[i].split(',');
+    // safety: minimum columns
     if (p.length < 6) continue;
+
+    const label = (p[1] || '').trim().toUpperCase();
+    if (label === 'TOTAL LBS' || label === 'TOTAL NET TONS') {
+      // handled below in totals pass
+      continue;
+    }
 
     const dateStr = (p[0] || '').trim();
     if (!dateStr) continue;
     const dt = new Date(dateStr);
     if (!isFinite(dt.getTime())) continue;
 
-    const num = (v) => {
-      const x = Number((v || '').trim());
-      return Number.isFinite(x) ? x : null;
-    };
-
     const material = (p[1] || '').trim();   // COMMODITY
-    const netLbs   = num(p[2]);             // NET (lbs)
-    const netTons  = num(p[3]);             // NET TONS
+    const netLbs   = toNum(p[2]);           // NET
+    const netTons  = toNum(p[3]);           // NET TONS
     const from     = (p[4] || '').trim();   // FROM PILE #
     const to       = (p[5] || '').trim();   // TO PILE #
 
-    rows.push({
-      date: dt,
-      dateLabel: dateStr,
-      from,
-      to,
-      netTons,
-      netLbs,
-      material
-    });
+    rows.push({ date: dt, dateLabel: dateStr, from, to, netTons, netLbs, material });
   }
 
-  // newest first
+  // Extract totals (by label, anywhere in file)
+  let totalLbs = null;
+  let totalTons = null;
+  for (let i = 1; i < lines.length; i++) {
+    const p = lines[i].split(',');
+    if (p.length < 2) continue;
+    const label = (p[1] || '').trim().toUpperCase();
+    if (label === 'TOTAL LBS') {
+      totalLbs = toNum(p[2]);            // pounds in column C
+    } else if (label === 'TOTAL NET TONS') {
+      totalTons = toNum(p[3]);           // tons in column D
+    }
+  }
+
+  // Sort newest first for activity list
   rows.sort((a, b) => b.date - a.date);
 
-  // Month summary (current month)
+  // Optional month metadata (kept for your UI; not used for the new summary line)
   const nowD = new Date();
   const Y = nowD.getFullYear(), M = nowD.getMonth();
   const monthRows = rows.filter(r => r.date.getFullYear() === Y && r.date.getMonth() === M);
-
-  const totalMonthTons = monthRows.reduce((a, r) => a + (r.netTons || 0), 0);
   const materialsTouched = Array.from(new Set(
     monthRows.map(r => (r.material || '').trim()).filter(Boolean)
   )).sort();
@@ -356,37 +415,41 @@ async function fetchBreakingTotals(force = false) {
     month: {
       year: Y,
       monthIndex: M,
-      totalMonthTons,
+      // retain legacy field (still useful elsewhere), but now you won’t rely on it for the summary
+      totalMonthTons: monthRows.reduce((sum, r) => sum + (r.netTons || 0), 0),
       materialsTouched,
       rowCount: monthRows.length
+    },
+    totals: {
+      totalLbs,   // from CSV TOTAL LBS
+      totalTons   // from CSV TOTAL NET TONS
     }
   };
+
   breakingCache = { at: now, data: payload };
   return payload;
 }
-``
 
 // 4) Popup rendering
-
-  function extractPileCode(name) {
-    if (!name) return null;
-    const m = name.match(/^[A-Za-z0-9]+/); // leading alphanumerics (e.g., "62U" from "62U Unbreakable")
-    return m ? m[0] : null;
-  }
-
 function buildUnprepRows(markers, stockIndex) {
   return markers
     .filter(m => m.type === "Breaking" || m.type === "Unbreakable")
     .map(m => {
       const code = extractPileCode(m.name);
       const s = (code && stockIndex[code]) ? stockIndex[code] : {};
-      const inv = s.operating_inventory_lbs ?? 0;
+      const inv = (typeof s.operating_inventory_lbs === 'number')
+        ? s.operating_inventory_lbs
+        : Number(s.operating_inventory_lbs || 0);
       const lastZero = s.last_zero_date ?? '—';
+
+      const invStyle = invAlertStyle(inv);
+      const lzStyle  = lastZeroColor(lastZero);
+
       return `
         <tr>
           <td style="padding:2px 6px">${m.name}</td>
-          <td style="padding:2px 6px;text-align:right">${inv.toLocaleString('en-US')}</td>
-          <td style="padding:2px 6px">${lastZero}</td>
+          <td style="padding:2px 6px;text-align:right;${invStyle}">${Number.isFinite(inv) ? inv.toLocaleString('en-US') : '—'}</td>
+          <td style="padding:2px 6px;${lzStyle}">${lastZero}</td>
         </tr>
       `;
     })
@@ -398,15 +461,20 @@ function buildCoilsRows(markers, stockIndex) {
     .filter(m => m.type === "Coils")
     .map(m => {
       const code = extractPileCode(m.name);
-      const stock = stockIndex[code] || {};
-      const inv = stock.operating_inventory_lbs ?? 0;
-      const lastZero = stock.last_zero_date ?? '—';
+      const s = code ? (stockIndex[code] || {}) : {};
+      const inv = (typeof s.operating_inventory_lbs === 'number')
+        ? s.operating_inventory_lbs
+        : Number(s.operating_inventory_lbs || 0);
+      const lastZero = s.last_zero_date ?? '—';
+
+      const invStyle = invAlertStyle(inv);
+      const lzStyle  = lastZeroColor(lastZero);
 
       return `
         <tr>
           <td style="padding:2px 6px">${m.name}</td>
-          <td style="padding:2px 6px;text-align:right">${inv.toLocaleString()}</td>
-          <td style="padding:2px 6px">${lastZero}</td>
+          <td style="padding:2px 6px;text-align:right;${invStyle}">${Number.isFinite(inv) ? inv.toLocaleString('en-US') : '—'}</td>
+          <td style="padding:2px 6px;${lzStyle}">${lastZero}</td>
         </tr>
       `;
     })
@@ -438,37 +506,42 @@ function getCoilsTotalInventory(markers, stockIndex) {
   }
   return total;
 }
-``
 
 function renderBreakingPopup(payload, markers, stockIndex) {
   if (!payload) {
     return '<b>Breaking Pit</b><div>No data.</div>';
   }
 
-  // Monthly summary pieces
-  const monthTons = payload.month.totalMonthTons;
-  const monthTonsText = fmtTons2(monthTons, 2);
-  const materials = payload.month.materialsTouched;
-  const materialsText = materials.length ? materials.join(', ') : '—';
-  const unprepTotalLbs = getUnprepTotalInventory(markers, stockIndex);
-  const unprepLbsText  = isFinite(unprepTotalLbs) ? unprepTotalLbs.toLocaleString('en-US') : '—';
-  const unprepTonsText = isFinite(unprepTotalLbs) ? (unprepTotalLbs / 2000).toFixed(2) : '—';
+  // --- Breaking summary (Unprep first, then Processed; no mismatched <b>) ---
+const t = payload.totals || {};
+const totalProcessedLbs  = (typeof t.totalLbs  === 'number' && isFinite(t.totalLbs))   ? t.totalLbs  : null;
+const totalProcessedTons = (typeof t.totalTons === 'number' && isFinite(t.totalTons)) ? t.totalTons : null;
+const totalProcessedText = (totalProcessedLbs !== null)
+  ? `${fmtInt(totalProcessedLbs)} <span style="color:#555">(${fmtTons2(totalProcessedTons ?? 0, 2)} tons)</span>`
+  : '—';
 
-  // Summary block
-  const summary = `
-    <div style="margin-bottom:8px">
-      <table style="width:100%;font-size:12px;line-height:1.3;border-collapse:collapse">
-        <tr>
-          <td style="color:#666;padding:2px 6px">Total Unprep Inventory</td>
-          <td style="text-align:right;padding:2px 6px"><b>${unprepLbsText}</b> <span style="color:#555">(${unprepTonsText} tons)</span></td>
-        </tr>
-        <tr>
-          <td style="color:#666;padding:2px 6px">Total Processed(net tons)</td>
-          <td style="text-align:right;padding:2px 6px"><b>${monthTonsText}</b></td>
-        </tr>
-      </table>
-    </div>
-  `;
+const unprepTotalLbs = getUnprepTotalInventory(markers, stockIndex);
+const unprepLbsText  = isFinite(unprepTotalLbs) ? unprepTotalLbs.toLocaleString('en-US') : '—';
+const unprepTonsText = isFinite(unprepTotalLbs) ? (unprepTotalLbs / 2000).toFixed(2) : '—';
+
+const summary = `
+  <div style="margin-bottom:8px">
+    <table style="width:100%;font-size:12px;line-height:1.3;border-collapse:collapse">
+      <tr>
+        <td style="color:#666;padding:2px 6px">Total Unprep Inventory</td>
+        <td style="text-align:right;padding:2px 6px">
+          <span>${unprepLbsText}</span> <span style="color:#555">(${unprepTonsText} tons)</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="color:#666;padding:2px 6px">Total Processed</td>
+        <td style="text-align:right;padding:2px 6px">
+          <span>${totalProcessedText}</span>
+        </td>
+      </tr>
+    </table>
+  </div>
+`;
 
   // Activity rows (you can choose monthRows only; here we show ALL rows like Burning)
   const rowsHtml = payload.rows.map(r => `
@@ -480,7 +553,8 @@ function renderBreakingPopup(payload, markers, stockIndex) {
     </tr>
   `).join('');
 
-  const activity = `
+  
+const activity = `
   <div id="breakingActivity" style="display:none">
     <table style="width:100%;font-size:12px;border-collapse:collapse">
       <thead>
@@ -501,13 +575,19 @@ function renderBreakingPopup(payload, markers, stockIndex) {
       Show Activity
     </button>
 
-    <!-- Top Unprep toggle (like CoilsTop) -->
+    <!-- NEW: mirror Burning's Download CSV button -->
+    <button type="button" id="breakingDownload"
+      style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f8f8f8;cursor:pointer; display:none">
+      Download CSV
+    </button>
+
+    <!-- Top Unprep toggle -->
     <button type="button" id="unprepToggleTop"
       style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f8f8f8;cursor:pointer">
       Show Unprep
     </button>
   </div>
-  `;
+`;
 
   // Unprep section + bottom button (mirrors coils section)
   const unprepRowsHtml = buildUnprepRows(markers, stockIndex);
@@ -567,7 +647,7 @@ const summary = `
     <table style="width:100%;font-size:12px;line-height:1.3;border-collapse:collapse">
       <tr>
         <td style="color:#666;padding:2px 6px">Total Coil Inventory</td>
-        <td style="text-align:right;padding:2px 6px"><b>${coilsInvText}</b> <span style="color:#555">(${coilsInvTonsText} tons)</span></td>
+        <td style="text-align:right;padding:2px 6px"><b>${coilsInvText}</b> <span style="color:#555"><b>(${coilsInvTonsText} tons)</b></span></td>
       </tr>
       <tr>
         <td style="color:#666;padding:2px 6px">Net Tons Cut</td>
@@ -668,12 +748,24 @@ function wireBreakingPopupEvents(container, marker) {
   const activityToggle = container.querySelector('#breakingToggle');
   const activityBlock  = container.querySelector('#breakingActivity');
 
+  // NEW: Download button
+  const dlBtn = container.querySelector('#breakingDownload');
+
   // Unprep top/bottom buttons + section
   const unprepTopBtn = container.querySelector('#unprepToggleTop');
   const unprepBtmBtn = container.querySelector('#unprepToggleBottom');
   const unprepDiv    = container.querySelector('#unprepSection');
 
   // ---- helpers ----
+  function isActivityShown() { return activityBlock && activityBlock.style.display !== 'none'; }
+  function isUnprepShown()   { return unprepDiv && unprepDiv.style.display === 'block'; }
+
+  function setDownloadVisibility() {
+    if (!dlBtn) return;
+    // Mirror Burning: show download only when Activity is visible and Unprep is not open
+    dlBtn.style.display = (isActivityShown() && !isUnprepShown()) ? '' : 'none';
+  }
+
   function setUnprepState(show) {
     if (!unprepDiv) return;
     unprepDiv.style.display = show ? 'block' : 'none';
@@ -684,11 +776,12 @@ function wireBreakingPopupEvents(container, marker) {
     if (unprepBtmBtn) {
       unprepBtmBtn.textContent = show ? 'Hide Unprep' : 'Show Unprep';
     }
-    // hide Activity button while Unprep is open (mirroring Burning)
+    // Hide Activity button while Unprep is open (mirroring Burning)
     if (activityToggle) activityToggle.style.display = show ? 'none' : '';
+    setDownloadVisibility(); // keep download in sync
   }
 
-  // Initialize unprep (hidden by default)
+  // Initialize Unprep
   if (unprepDiv && (unprepTopBtn || unprepBtmBtn)) {
     setUnprepState(unprepDiv.style.display === 'block');
     const onUnprepClick = () => {
@@ -699,7 +792,7 @@ function wireBreakingPopupEvents(container, marker) {
     if (unprepBtmBtn) unprepBtmBtn.addEventListener('click', onUnprepClick);
   }
 
-  // Activity toggle (mirrors your Burning Activity wiring)
+  // Activity toggle (mirrors Burning)
   if (activityToggle && activityBlock) {
     if (activityBlock.style.display === '') activityBlock.style.display = 'none';
     activityToggle.addEventListener('click', e => {
@@ -712,14 +805,32 @@ function wireBreakingPopupEvents(container, marker) {
       } else {
         activityBlock.style.display = 'none';
         activityToggle.textContent = 'Show Activity';
-        // only re-show top unprep button if unprep section is closed
-        if (unprepTopBtn && (!unprepDiv || unprepDiv.style.display !== 'block')) {
-          unprepTopBtn.style.display = '';
-        }
+        if (unprepTopBtn && !isUnprepShown()) unprepTopBtn.style.display = '';
       }
+      setDownloadVisibility();
     });
     activityBlock.addEventListener('click', e => e.stopPropagation());
+  } else {
+    // If there's no activity section, make sure download is hidden
+    if (dlBtn) dlBtn.style.display = 'none';
   }
+
+  // NEW: Download handler for Breaking (mirrors Burning)
+  if (dlBtn) {
+    dlBtn.addEventListener('click', e => {
+      e.preventDefault(); e.stopPropagation();
+      const a = document.createElement('a');
+      a.href = breakingCsvUrl;       // <-- uses the existing constant
+      a.target = '_blank';
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+  }
+
+  // Initial visibility
+  setDownloadVisibility();
 }
 
 function wireBurningPopupEvents(container, marker) {
@@ -911,7 +1022,6 @@ breakingArea.on('popupopen', async () => {
     breakingArea.setPopupContent('<b>Breaking Pit</b><div style="color:#c00">Failed to load BreakingTotals.csv.</div>');
   }
 });
-``
 /* ===================================================================
  LOAD MARKERS + ENRICH POPUPS
 =================================================================== */
@@ -925,30 +1035,6 @@ Promise.all([
   const unknownTypes = new Set();
 
   // Helpers
-  function parseMDY(dateStr) {
-    if (!dateStr) return null;
-    const parts = dateStr.split('/');
-    if (parts.length !== 3) return null;
-    const m = parseInt(parts[0], 10);
-    const d = parseInt(parts[1], 10);
-    const y = parseInt(parts[2], 10);
-    if (!m || !d || !y) return null;
-    return new Date(y, m - 1, d);
-  }
-  function monthsDiff(a, b) {
-    const years = b.getFullYear() - a.getFullYear();
-    const months = years * 12 + (b.getMonth() - a.getMonth());
-    return (b.getDate() >= a.getDate()) ? months : months - 1;
-  }
-  function lastZeroColor(dateStr) {
-    const dt = parseMDY(dateStr);
-    if (!dt) return '';
-    const now = new Date();
-    const m = monthsDiff(dt, now);
-    if (m > 6) return 'color:#c62828; font-weight:700;';
-    if (m > 3) return 'color:#f9a825; font-weight:700;';
-    return '';
-  }
   function formatAgeYM(totalMonths) {
     if (typeof totalMonths !== 'number' || !isFinite(totalMonths) || totalMonths < 0) return '';
     const years = Math.floor(totalMonths / 12);
@@ -957,23 +1043,42 @@ Promise.all([
     const mPart = months > 0 ? `${months} ${months === 1 ? 'month' : 'months'}` : (years === 0 ? '0 months' : '');
     return yPart && mPart ? `${yPart} ${mPart}` : (yPart || mPart);
   }
-  function renderPopupHtml(marker, s) {
-    if (!s) return `<b>${marker.name}</b>`;
-    const invText = (typeof s.operating_inventory_lbs === 'number')
-      ? s.operating_inventory_lbs.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' lbs'
-      : '—';
-    const lzStyle = lastZeroColor(s.last_zero_date);
-    return `
-      <div style="min-width:220px">
-        <div style="font-weight:700;margin-bottom:4px">${marker.name}</div>
-        <table style="font-size:12px;line-height:1.3">
-          <tr><td style="padding-right:8px;color:#666">Material:</td><td>${s.material || ''}</td></tr>
-          <tr><td style="padding-right:8px;color:#666">Inventory:</td><td>${invText}</td></tr>
-          <tr><td style="padding-right:8px;color:#666">Last Zero Date:</td><td style="${lzStyle}">${s.last_zero_date || ''}</td></tr>
-        </table>
-      </div>
-    `;
-  }
+
+function renderPopupHtml(marker, s) {
+  if (!s) return `<b>${marker.name}</b>`;
+
+  const inv = (typeof s.operating_inventory_lbs === 'number')
+    ? s.operating_inventory_lbs
+    : Number(s.operating_inventory_lbs || 0);
+
+  const invText = Number.isFinite(inv)
+    ? inv.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' lbs'
+    : '—';
+
+  const invStyle = invAlertStyle(inv);
+  const matStyle = invStyle; // material follows the same rule
+  const lzStyle  = lastZeroColor(s.last_zero_date);
+
+  return `
+    <div style="min-width:220px">
+      <div style="font-weight:700;margin-bottom:4px">${marker.name}</div>
+      <table style="font-size:12px;line-height:1.3">
+        <tr>
+          <td style="padding-right:8px;color:#666">Material:</td>
+          <td style="${matStyle}">${s.material ?? ''}</td>
+        </tr>
+        <tr>
+          <td style="padding-right:8px;color:#666">Inventory:</td>
+          <td style="${invStyle}">${invText}</td>
+        </tr>
+        <tr>
+          <td style="padding-right:8px;color:#666">Last Zero Date:</td>
+          <td style="${lzStyle}">${s.last_zero_date ?? ''}</td>
+        </tr>
+      </table>
+    </div>
+  `;
+}
 
   // Create markers
   markers.forEach(marker => {
@@ -1723,4 +1828,3 @@ document.getElementById('getCoords').addEventListener('click', async () => {
  GLOBAL ERROR LOGGING
 =================================================================== */
 window.addEventListener("error", e => console.error("Error:", e.message));
-``
