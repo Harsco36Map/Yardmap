@@ -1735,6 +1735,9 @@ ${sheetData}
   };
     searchCtrl.addTo(map);
     pastDueCtrl.addTo(map);
+ if (unknownTypes.size) console.warn('Unknown types:', Array.from(unknownTypes));
+}).catch(err => console.error('Data load failed:', err));
+
 /* ===================================================================
  LAYER CONTROL
 =================================================================== */
