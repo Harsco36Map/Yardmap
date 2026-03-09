@@ -101,23 +101,26 @@
   {"type":"Unbreakable","name":"17S Workrolls Unbreakable"},
 {"type":"Coils","name":"40S SORTING"},
   {"type":"Coils","name":"13C 446-24"},
-  {"type":"Coils","name":"24C 435"},
+  {"type":"Coils","name":"24C 435St"},
   {"type":"Coils","name":"26C 435 Home"},
   {"type":"Coils","name":"32C 409 Home"},
   {"type":"Coils","name":"35C EVC Home"},
   {"type":"Coils","name":"38C 439 Home"},
-  {"type":"Coils","name":"40C 409"},
-  {"type":"Coils","name":"50C 430"},
+  {"type":"Coils","name":"40C 409St"},
+  {"type":"Coils","name":"40A 409St"},
+  {"type":"Coils","name":"50C 430St"},
   {"type":"Coils","name":"51C 430/440 Home"},
   {"type":"Coils","name":"59C 181 Home"},
   {"type":"Coils","name":"59A 181 Home"},
-  {"type":"Coils","name":"60C 181"},
+  {"type":"Coils","name":"60C 181St"},
   {"type":"Coils","name":"64C 409Ni"},
+  {"type":"Coils","name":"73C 300St"},
   {"type":"Coils","name":"81C 151 Home"},
-  {"type":"Coils","name":"94C 436"},
+  {"type":"Coils","name":"94C 436St"},
   {"type":"Coils","name":"95C 436 Home"},
   {"type":"Coils","name":"95J 446 Home"},
 {"type":"Tundish","name":"EVCt","lat":40.793921172124534,"lng":-82.53828533805394},{"type":"Reclaim","name":"EVCrc","lat":40.793813713003665,"lng":-82.53804611041147},{"type":"Other","name":"Rejected 430 #H77977","lat":40.79406863878592,"lng":-82.53815352916719},{"type":"Other","name":"958","lat":40.79576569549429,"lng":-82.54109946712252},{"type":"Other","name":"132","lat":40.79574887999851,"lng":-82.54087905512321}]
+
 
 
 
