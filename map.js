@@ -1,3 +1,4 @@
+console.log('XLSX at map.js load:', window.XLSX);
 
 /* ===================================================================
  MAP SETUP
@@ -83,6 +84,7 @@ function collapseOthers(exceptId) {
 
 let allMarkersData = [];
 let stockIndexGlobal = {};
+let searchMode = 'all'; // 'all' | 'pastDue'
 
 /* ===================================================================
  ATTENTION "PING" EFFECT
@@ -174,6 +176,7 @@ Object.keys(loadCellMarkers).forEach(id => {
   const ctrl = L.control({ position: 'topright' });
   ctrl.onAdd = function() {
     const div = L.DomUtil.create('div');
+    div.tabIndex = 0;
     div.id = 'invBanner';
     div.style.background = 'rgba(255,255,255,0.9)';
     div.style.border = '1px solid #ccc';
@@ -186,7 +189,7 @@ Object.keys(loadCellMarkers).forEach(id => {
     return div;
   };
   ctrl.addTo(map);
-  fetch('stockData.json').then(r => r.json()).then(payload => {
+  fetchLatestInventoryCsv().then(payload => {
     const d = payload && payload.meta && payload.meta.report_date;
     const banner = document.getElementById('invBanner');
     if (banner && d) banner.textContent = `Inventory data current as of ${d}`;
@@ -272,6 +275,97 @@ function unescapeAngles(s) {
 }
 
 // 3) CSV loader -------------------------------------------------------
+function parseCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map(v => v.trim());
+}
+
+async function fetchLatestInventoryCsv() {
+  const res = await fetch('LatestInventory.csv', { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to load LatestInventory.csv');
+
+  const text = await res.text();
+  const lines = text.split(/\r?\n/).filter(Boolean);
+
+  // Extract report date from header
+  let report_date = '—';
+  for (const line of lines) {
+    const m = line.match(/created at\s+(.*)$/i);
+    if (m) {
+      report_date = m[1].trim();
+      break;
+    }
+  }
+
+  // Find CSV header row
+  const headerIndex = lines.findIndex(l => l.startsWith(',"Code"'));
+  if (headerIndex === -1) {
+    throw new Error('Inventory CSV header not found');
+  }
+
+  const stock = {};
+
+  const num = v => {
+    const x = Number((v ?? '').replace(/,/g, '').trim());
+    return Number.isFinite(x) ? x : 0;
+  };
+
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const raw = lines[i];
+    if (!raw) continue;
+
+    const p = parseCsvLine(raw);
+    if (p.length < 12) continue;
+
+    const [
+      , code, material, pile,
+      monthBegin, transfers, receipts, buckets,
+      issues, adjustments, depletions,
+      operatingInventory, lastZero
+    ] = p;
+
+    if (!pile) continue;
+
+    stock[pile] = {
+      code,
+      material,
+      pile,
+      month_begin_lbs: num(monthBegin),
+      transfers_lbs: num(transfers),
+      receipts_lbs: num(receipts),
+      issues_lbs: num(issues),
+      adjustments_lbs: num(adjustments),
+      depletions_lbs: num(depletions),
+      operating_inventory_lbs: num(operatingInventory),
+      last_zero_date: lastZero || ''
+    };
+  }
+
+  return {
+    meta: { report_date },
+    stock
+  };
+}
+
 async function fetchBurningTotals(force = false) {
   const now = Date.now();
   if (!force && burningCache.data && (now - burningCache.at) < 120000) {
@@ -1027,7 +1121,7 @@ breakingArea.on('popupopen', async () => {
 =================================================================== */
 Promise.all([
   fetch('markers.json').then(r => r.json()),
-  fetch('stockData.json').then(r => r.json())
+  fetchLatestInventoryCsv()
 ]).then(([markers, stockPayload]) => {
   allMarkersData = markers;                 // save globally
   stockIndexGlobal = stockPayload.stock || {};
@@ -1144,6 +1238,285 @@ function isPastDueExempt(marker, stockIndex) {
     }
   });
   pastDue.sort((a, b) => (b.ageMonths - a.ageMonths) || a.code.localeCompare(b.code));
+  window.pastDue = pastDue;
+
+  /* ===================================================================
+ Unified Search / Past Due Panel
+=================================================================== */
+const searchCtrl = L.control({ position: 'bottomright' });
+searchCtrl.onAdd = function () {
+  const div = L.DomUtil.create('div');
+  L.DomEvent.disableScrollPropagation(div);
+  L.DomEvent.disableClickPropagation(div);
+
+  div.id = 'searchPanel';
+  Object.assign(div.style, {
+    background: 'rgba(255,255,255,0.95)',
+    border: '1px solid #ccc',
+    borderRadius: '4px',
+    padding: '6px 10px',
+    margin: '8px',
+    font: '12px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+    width: '260px',
+    maxHeight: '320px',
+    overflow: 'hidden'
+  });
+
+  let collapsed = true;
+  const headerEl = document.createElement('div');
+  const bodyEl = document.createElement('div');
+
+  function renderHeader(countText = '') {
+    headerEl.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-weight:700">
+          Search Piles <span style="color:#555">${countText}</span>
+        </span>
+        <button id="srchToggleBtn"
+          style="padding:2px 6px;border:1px solid #ccc;border-radius:3px;background:#f8f8f8">
+          ${collapsed ? '▸' : '▾'}
+        </button>
+      </div>
+    `;
+  }
+
+  function getVisiblePiles() {
+    if (searchMode === 'pastDue') {
+      return pastDue.map(p => ({
+        code: p.code,
+        name: p.name,
+        material: p.material,
+        marker: p.marker,
+        invLbs: p.invLbs,
+        lastZero: p.lastZero,
+        ageLabel: p.ageLabel
+      }));
+    }
+
+    return markers.map(m => {
+      const code = extractPileCode(m.name);
+      const s = code ? stockIndexGlobal[code] : null;
+      return {
+        code,
+        name: m.name,
+        material: s?.material ?? '',
+        marker: m._leaflet
+      };
+    });
+  }
+
+  function renderBody() {
+    if (collapsed) {
+      bodyEl.innerHTML = '';
+      renderHeader('');
+      return;
+    }
+
+    bodyEl.innerHTML = `
+      <div style="display:flex;gap:4px;margin-bottom:6px">
+        <button id="modeAll">All</button>
+        <button id="modePast">Past Due (${pastDue.length})</button>
+        <button id="pdExport" style="margin-left:auto;display:none">Export</button>
+      </div>
+      <input id="pileSearch"
+        placeholder="Filter piles..."
+        style="width:100%;padding:4px 6px;margin-bottom:6px;border:1px solid #ddd;border-radius:3px" />
+      <ul id="pileList"
+        style="list-style:none;padding:0;margin:0;max-height:220px;overflow:auto"></ul>
+    `;
+
+    const listEl = bodyEl.querySelector('#pileList');
+    const input = bodyEl.querySelector('#pileSearch');
+    const btnAll = bodyEl.querySelector('#modeAll');
+    const btnPast = bodyEl.querySelector('#modePast');
+    const btnExport = bodyEl.querySelector('#pdExport');
+    let activeIndex = -1;
+
+    function renderList() {
+      const term = input.value.trim().toLowerCase();
+      listEl.innerHTML = '';
+
+      let rows = getVisiblePiles();
+      if (searchMode === 'all' && term) {
+        rows = rows.filter(p =>
+          (p.code && p.code.toLowerCase().includes(term)) ||
+          (p.name && p.name.toLowerCase().includes(term)) ||
+          (p.material && p.material.toLowerCase().includes(term))
+        );
+      }
+
+function handlePanelKeydown(e) {
+  const items = listEl.children;
+  if (!items.length) return;
+
+  // ⬇ Arrow navigation
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    e.stopPropagation();
+
+    activeIndex = Math.min(activeIndex + 1, items.length - 1);
+    items[activeIndex].scrollIntoView({ block: 'nearest' });
+    renderList();
+    return;
+  }
+
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    e.stopPropagation();
+
+    activeIndex = Math.max(activeIndex - 1, 0);
+    items[activeIndex].scrollIntoView({ block: 'nearest' });
+    renderList();
+    return;
+  }
+
+  // ⏎ Activate
+  if (e.key === 'Enter' && activeIndex >= 0) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const p = getVisiblePiles()[activeIndex];
+    if (p?.marker) pingMarker(p.marker);
+    return;
+  }
+
+  // ⎋ Close panel
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+
+    collapsed = true;
+    renderBody();
+    map.keyboard.enable();
+    headerEl.focus();
+  }
+}
+      renderHeader(`(${rows.length})`);
+
+      rows.forEach((p, idx) => {
+  const li = document.createElement('li');
+  li.style.padding = '6px 0';
+  li.style.borderBottom = '1px dashed #eee';
+  li.style.cursor = 'pointer';
+
+  if (idx === activeIndex) {
+    li.style.background = '#e8f0ff';
+  }
+
+  li.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-weight:600;${(() => {
+          const lz = p.lastZero ??
+            (p.code && stockIndexGlobal[p.code]?.last_zero_date);
+          return lastZeroColor(lz);
+        })()}">
+          ${p.code ?? '—'} — ${p.material}
+        </div>
+        <div style="color:#555">${p.name}</div>
+      </div>
+      <button
+        style="margin-left:8px;padding:2px 6px;border:1px solid #ccc;
+               border-radius:3px;cursor:pointer;background:#f8f8f8">
+        Ping
+      </button>
+    </div>
+  `;
+
+  li.addEventListener('click', () => {
+    activeIndex = idx;
+    renderList();
+    if (p.marker) pingMarker(p.marker);
+  });
+
+  const btn = li.querySelector('button');
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    activeIndex = idx;
+    renderList();
+    if (p.marker) pingMarker(p.marker);
+  });
+
+  listEl.appendChild(li);
+});
+    }
+function setMode(mode) {
+  searchMode = mode;
+  btnAll.style.fontWeight = mode === 'all' ? '700' : '';
+  btnPast.style.fontWeight = mode === 'pastDue' ? '700' : '';
+  btnExport.style.display = mode === 'pastDue' ? '' : 'none';
+  input.style.display = mode === 'pastDue' ? 'none' : '';
+  if (mode === 'all') {
+    input.focus();
+  }
+  if (mode === 'pastDue') {
+    input.value = '';
+    activeIndex = -1;
+  }
+  renderList();
+}
+    btnAll.onclick = () => setMode('all');
+    btnPast.onclick = () => setMode('pastDue');
+    btnExport.onclick = () => exportPastDueXlsx();
+
+    input.oninput = renderList;
+    input.addEventListener('keydown', e => {
+  const items = listEl.children;
+  if (!items.length) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    activeIndex = Math.min(activeIndex + 1, items.length - 1);
+    items[activeIndex].scrollIntoView({ block: 'nearest' });
+    renderList();
+  }
+
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    activeIndex = Math.max(activeIndex - 1, 0);
+    items[activeIndex].scrollIntoView({ block: 'nearest' });
+    renderList();
+  }
+
+  if (e.key === 'Enter' && activeIndex >= 0) {
+    e.preventDefault();
+    const p = getVisiblePiles()[activeIndex];
+    if (p?.marker) pingMarker(p.marker);
+  }
+});
+
+    setMode(searchMode);
+  }
+
+headerEl.onclick = () => {
+  const wasCollapsed = collapsed;
+  collapsed = !collapsed;
+  renderBody();
+
+  if (wasCollapsed && !collapsed) {
+    map.keyboard.disable();
+    requestAnimationFrame(() => {
+      if (searchMode === 'all') {
+        input?.focus();
+      } else {
+        div.focus();
+      }
+    });
+  } else if (!wasCollapsed && collapsed) {
+    map.keyboard.enable();
+  }
+};
+
+  renderHeader('');
+  renderBody();
+
+  div.appendChild(headerEl);
+  div.appendChild(bodyEl);
+  return div;
+};
+
+searchCtrl.addTo(map);
 
   /* ===================================================================
    CONSUMPTION CSV PARSER
@@ -1175,568 +1548,75 @@ function isPastDueExempt(marker, stockIndex) {
     return { pileAvgByCode };
   }
 
-  /* ===================================================================
-   Toggleable Past Due Panel
-  =================================================================== */
-  const pastDueCtrl = L.control({ position: 'bottomright' });
-  pastDueCtrl.onAdd = function () {
-    const div = L.DomUtil.create('div'); 
-    L.DomEvent.disableScrollPropagation(div);
-    L.DomEvent.disableClickPropagation(div);
-    div.id = 'pastDuePanel';
-    Object.assign(div.style, {
-      background: 'rgba(255,255,255,0.95)',
-      border: '1px solid #ccc',
-      borderRadius: '4px',
-      padding: '6px 10px',
-      margin: '8px',
-      font: '12px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
-      width: '260px',
-      maxHeight: '300px',
-      overflow: 'hidden',
-      transition: 'height 160ms ease, padding 160ms ease'
-    });
-    let collapsed = true;
-    const headerEl = document.createElement('div');
-    const bodyEl = document.createElement('div');
+  window.fetchConsumptionCsv = fetchConsumptionCsv;
 
-    
-   // expose simple API to the accordion
-   function isExpanded() { return !collapsed; }
-   function expand()   { if (collapsed) { collapsed = false; renderHeader(); renderBody(); } }
-   function collapse() { if (!collapsed) { collapsed = true;  renderHeader(); renderBody(); } }
+ if (unknownTypes.size) console.warn('Unknown types:', Array.from(unknownTypes));
+}).catch(err => console.error('Data load failed:', err));
 
-
-    function renderHeader() {
-      headerEl.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <span style="font-weight:700">Past Due (> 6 mo)
-            <span style="color:#c62828">●</span> (${pastDue.length})
-          </span>
-          <button id="pdToggleBtn"
-            aria-expanded="${!collapsed}"
-            title="${collapsed ? 'Expand' : 'Collapse'}"
-            style="padding:2px 6px;border:1px solid #ccc;border-radius:3px;
-                   cursor:default;background:#f8f8f8;display:flex;align-items:center">
-            ${collapsed ? '▸' : '▾'}
-          </button>
-        </div>
-      `;
-    }
-    function renderBody() {
-      if (collapsed) {
-        bodyEl.innerHTML = '';
-        div.style.height = '24px';
-        div.style.padding = '6px 10px';
-        div.style.pointerEvents = 'auto';
-        return;
-      }
-      bodyEl.innerHTML = `
-        <div style="margin-top:6px;display:flex;align-items:center;justify-content:space-between">
-          <input id="pdSearch" type="text" placeholder="Filter by code/material..."
-            style="flex:1;padding:4px 6px;border:1px solid #ddd;border-radius:3px;margin-right:6px">
-          <button id="pdExportBtn" title="Export XLSX"
-            style="padding:4px 8px;border:1px solid #ccc;border-radius:3px;cursor:pointer;background:#f8f8f8">
-            Export
-          </button>
-        </div>
-        <ul id="pdList" style="list-style:none;padding:0;margin:8px 0 0 0;max-height:220px;overflow:auto"></ul>
-      `;
-      div.style.height = '300px';
-      div.style.padding = '6px 10px';
-
-      const ul = bodyEl.querySelector('#pdList');
-      const searchInput = bodyEl.querySelector('#pdSearch');
-
-      function renderList(filterText = '') {
-        ul.innerHTML = '';
-        const term = filterText.trim().toLowerCase();
-        const items = pastDue.filter(p => {
-          if (!term) return true;
-          return (
-            (p.code && p.code.toLowerCase().includes(term)) ||
-            (p.name && p.name.toLowerCase().includes(term)) ||
-            (p.material && p.material.toLowerCase().includes(term))
-          );
-        });
-        items.forEach(p => {
-          const li = document.createElement('li');
-          li.style.padding = '6px 0';
-          li.style.borderBottom = '1px dashed #eee';
-          li.style.cursor = 'default';
-          const invText = (typeof p.invLbs === 'number')
-            ? p.invLbs.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' lbs'
-            : '—';
-          li.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <div>
-                <div style="font-weight:600">${p.code} — ${p.material}</div>
-                <div style="color:#555">${p.name}</div>
-                <div style="color:#c62828;font-weight:700">Last zero: ${p.lastZero}</div>
-                <div style="color:#333">Age: ${p.ageLabel}</div>
-                <div style="color:#333">Inventory: ${invText}</div>
-              </div>
-              <button style="margin-left:8px;padding:2px 6px;border:1px solid #ccc;border-radius:3px;cursor:pointer">Ping</button>
-              </div>
-          `;          
-          li.addEventListener('click', () => {
-            const target =
-              (p.rawType === 'Coils' && window.burningArea) ? window.burningArea :
-              ((p.rawType === 'Breaking' || p.rawType === 'Unbreakable') && window.breakingArea) ? window.breakingArea :
-              p.marker;
-            if (target) pingMarker(target);
-          });          
-          li.querySelector('button').addEventListener('click', (e) => {
-            e.stopPropagation();
-            const target =
-              (p.rawType === 'Coils' && window.burningArea) ? window.burningArea :
-              ((p.rawType === 'Breaking' || p.rawType === 'Unbreakable') && window.breakingArea) ? window.breakingArea :
-              p.marker;
-            if (target) pingMarker(target);
-          });
-          ul.appendChild(li);
-        });
-      }
-      renderList();
-      searchInput.addEventListener('input', (e) => renderList(e.target.value));
-
-/* ===================== XLSX EXPORT ===================== */
-bodyEl.querySelector('#pdExportBtn').addEventListener('click', async () => {
+/* ===================================================================
+ Past Due XLSX Export (robust, non-corrupt)
+=================================================================== */
+window.exportPastDueXlsx = async function exportPastDueXlsx() {
   try {
-    if (typeof JSZip === 'undefined') {
-      alert('JSZip is required to export XLSX. Please include JSZip in the page.');
-      return;
-    }
+    const XLSXlib = window.XLSX;
+if (!XLSXlib || !XLSXlib.utils) {
+  alert('XLSX library not loaded.');
+  console.error('XLSX missing or invalid:', window.XLSX);
+  return;
+}
+``
 
-    // Read Avg_Daily from averageconsumption.csv (column G)
+    // Fetch consumption averages
     const { pileAvgByCode } = await fetchConsumptionCsv();
 
-    // Timestamp for filename
+    const rows = pastDue.map(p => {
+      const codeKey = p.code?.trim().toUpperCase() ?? '';
+      const invLbs = typeof p.invLbs === 'number' ? Math.max(0, p.invLbs) : 0;
+      const avgDaily = pileAvgByCode[codeKey] ?? 0;
+      const dud = avgDaily > 0 ? invLbs / avgDaily : 0;
+
+      return {
+        'Pile Number': p.code ?? '—',
+        'Name': p.name ?? '—',
+        'Material': p.material ?? '—',
+        'Last Zero Date': p.lastZero ?? '—',
+        'Age': p.ageLabel ?? '—',
+        'Inventory (lbs)': invLbs,
+        'Average Consumed Daily': Math.round(avgDaily || 0),
+        'Days Until Depleted': Number.isFinite(dud) ? Number(dud.toFixed(1)) : 0,
+        'Action': ''
+      };
+    });
+
+    // Convert to worksheet
+    const ws = XLSXlib.utils.json_to_sheet(rows);
+
+    // Auto column widths
+    const colWidths = Object.keys(rows[0] || {}).map(k => ({
+      wch: Math.max(
+        k.length,
+        ...rows.map(r => String(r[k] ?? '').length)
+      ) + 2
+    }));
+    ws['!cols'] = colWidths;
+
+    // Build workbook
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'PastDue');
+
+    // Filename
     const today = new Date();
     const yyyy = today.getFullYear();
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const dd = String(today.getDate()).padStart(2, '0');
 
-    // Header row
-    const header = [
-      'Pile Number', 'Name', 'Material', 'Last Zero Date', 'Age', 'Inventory (lbs)',
-      'Average Consumed Daily', 'Days Until Depleted', 'Action'
-    ];
+    XLSX.writeFile(wb, `PastDue_${yyyy}-${mm}-${dd}.xlsx`);
 
-    // Build dataRows (A..I only)
-    const dataRows = pastDue.map(p => {
-      const codeKey = p.code ? p.code.trim().toUpperCase() : '';
-      const invLbs = (typeof p.invLbs === 'number') ? Math.max(0, p.invLbs) : 0;
-      const pileAvgDaily = pileAvgByCode[codeKey] ?? 0;
-      const dudPile = (pileAvgDaily > 0) ? (invLbs / pileAvgDaily) : 0;
-
-      return [
-        p.code ?? '—',
-        p.name ?? '—',
-        p.material ?? '—',
-        p.lastZero ?? '—',
-        p.ageLabel ?? '—',
-        Number.isFinite(invLbs) ? invLbs : 0,
-        (pileAvgDaily > 0 && isFinite(pileAvgDaily)) ? Math.round(pileAvgDaily) : 0,
-        (pileAvgDaily > 0 && isFinite(dudPile)) ? Number(dudPile.toFixed(1)) : 0,
-        '' // Action (I)
-      ];
-    });
-
-    // ==== Auto column widths (Calibri 11 heuristic: pixels ≈ 7*chars + 5) ====
-    function computeAutoColWidths(header, dataRows) {
-      const cols = header.length; // 9 (A..I)
-      const maxChars = Array(cols).fill(0);
-      const measure = (val) => {
-        if (val === null || val === undefined) return 0;
-        const s = (typeof val === 'number') ? String(val) : String(val);
-        return s.length;
-      };
-      for (let c = 0; c < cols; c++) maxChars[c] = Math.max(maxChars[c], measure(header[c]));
-      for (const row of dataRows) {
-        for (let c = 0; c < cols; c++) maxChars[c] = Math.max(maxChars[c], measure(row[c]));
-      }
-      const maxDigitWidth = 7; // px per "0" in Calibri 11
-      const paddingPx = 5;
-      const minWidthCh = 8.43; // don't go narrower than Excel default
-      return maxChars.map(chars => {
-        const pixels = chars * maxDigitWidth + paddingPx;
-        const width = Math.trunc((pixels / maxDigitWidth) * 256) / 256;
-        return Math.max(width, minWidthCh);
-      });
-    }
-    const autoColWidths = computeAutoColWidths(header, dataRows);
-
-    // ==== Build XLSX ====
-    const zip = new JSZip();
-    const xlNS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
-
-    // Simple XML escaper for inline string cells
-    const xmlEsc = s => String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&apos;');
-
-    function colLetter(n) {
-      let s = '';
-      while (n > 0) {
-        const m = (n - 1) % 26;
-        s = String.fromCharCode(65 + m) + s;
-        n = Math.floor((n - 1) / 26);
-      }
-      return s;
-    }
-    function cellRef(r, c) { return `${colLetter(c)}${r}`; }
-
-    const rowCount = dataRows.length + 1;
-
-    function buildCell(r, c, v, styleId = null) {
-      const ref = cellRef(r, c);
-      if (v === '' || v === null || v === undefined)
-        return `<c r="${ref}"${styleId !== null ? ` s="${styleId}"` : ''}/>`;
-      if (typeof v === 'number')
-        return `<c r="${ref}"${styleId !== null ? ` s="${styleId}"` : ''}><v>${v}</v></c>`;
-      return `<c r="${ref}" t="inlineStr"${styleId !== null ? ` s="${styleId}"` : ''}><is><t>${xmlEsc(v)}</t></is></c>`;
-    }
-
-    // Sheet rows (header style s=1, numeric right-align s=2 for F..H)
-    let sheetData = `<row r="1">`;
-    header.forEach((h, i) => { sheetData += buildCell(1, i + 1, h, 1); });
-    sheetData += `</row>`;
-    dataRows.forEach((row, idx) => {
-      const r = idx + 2;
-      sheetData += `<row r="${r}">`;
-      row.forEach((v, j) => {
-        const styleId = (j >= 5 && j <= 7) ? 2 : 0; // F(6),G(7),H(8) right-aligned
-        sheetData += buildCell(r, j + 1, v, styleId);
-      });
-      sheetData += `</row>`;
-    });
-
-    // Dimension and <cols> (A..I only; no helper column)
-    const firstRef = 'A1';
-    const lastRef  = cellRef(rowCount, 9); // I
-    let colsXml = '<cols>';
-    autoColWidths.forEach((w, i) => {
-      const idx = i + 1; // A=1..I=9
-      colsXml += `<col min="${idx}" max="${idx}" width="${w.toFixed(2)}" bestFit="1" customWidth="1"/>`;
-    });
-    colsXml += '</cols>';
-
-    // CF: color entire row A..I based on Action in I (no helper col)
-    const dvRange = `I2:I${rowCount}`;
-    const cfRange = `$A$2:$I$${rowCount}`;
-
-    const sheet1Xml = `<?xml version="1.0" encoding="UTF-8"?>
-<worksheet xmlns="${xlNS}">
-  <sheetPr/>
-  <dimension ref="${firstRef}:${lastRef}"/>
-  <sheetViews><sheetView workbookViewId="0"/></sheetViews>
-  <sheetFormatPr defaultRowHeight="15"/>
-  ${colsXml}
-  <sheetData>
-${sheetData}
-  </sheetData>
-
-  <conditionalFormatting sqref="${cfRange}">
-    <cfRule type="expression" priority="1" dxfId="0"><formula>$I2="Depleted"</formula></cfRule>
-    <cfRule type="expression" priority="2" dxfId="1"><formula>$I2="Priority Target"</formula></cfRule>
-    <cfRule type="expression" priority="3" dxfId="2"><formula>$I2="Stop Receiving"</formula></cfRule>
-  </conditionalFormatting>
-
-  <dataValidations count="1">
-    <dataValidation type="list" allowBlank="1" sqref="${dvRange}">
-      <formula1>"Depleted,Priority Target,Stop Receiving"</formula1>
-    </dataValidation>
-  </dataValidations>
-
-  <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
-</worksheet>`;
-
-    // Package parts
-    const contentTypesXml =
-      `<?xml version="1.0" encoding="UTF-8"?>` +
-      `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
-      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
-      `<Default Extension="xml" ContentType="application/xml"/>` +
-      `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
-      `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
-      `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
-      `</Types>`;
-
-    const rootRelsXml =
-      `<?xml version="1.0" encoding="UTF-8"?>` +
-      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>` +
-      `</Relationships>`;
-
-    const workbookXml =
-      `<?xml version="1.0" encoding="UTF-8"?>` +
-      `<workbook xmlns="${xlNS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
-      `<sheets><sheet name="PastDue" sheetId="1" r:id="rId1"/></sheets>` +
-      `<calcPr calcMode="auto" fullCalcOnLoad="1"/>` +
-      `</workbook>`;
-
-    const wbRelsXml =
-      `<?xml version="1.0" encoding="UTF-8"?>` +
-      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` +
-      `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
-      `</Relationships>`;
-
-    // styles.xml — keep your header (fontId=1), numeric right align (s=2),
-    // and add 3 DXFs with BOTH fgColor + bgColor so fills render on Desktop.
-    const stylesXml = `<?xml version="1.0" encoding="UTF-8"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="2">
-    <font><sz val="11"/><name val="Calibri"/></font>
-    <font><b/><sz val="11"/><name val="Calibri"/></font>
-  </fonts>
-  <fills count="2">
-    <fill><patternFill patternType="none"/></fill>
-    <fill><patternFill patternType="gray125"/></fill>
-  </fills>
-  <borders count="1">
-    <border><left/><right/><top/><bottom/><diagonal/></border>
-  </borders>
-  <cellStyleXfs count="1">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
-  </cellStyleXfs>
-  <cellXfs count="3">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0"/> <!-- header bold -->
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="right"/></xf>
-  </cellXfs>
-  <cellStyles count="1">
-    <cellStyle name="Normal" xfId="0" builtinId="0"/>
-  </cellStyles>
-  <dxfs count="3">
-    <!-- 0: Depleted (light gray) -->
-    <dxf>
-      <font><color rgb="FF000000"/></font>
-      <fill><patternFill patternType="solid">
-        <fgColor rgb="FFDDDDDD"/><bgColor rgb="FFDDDDDD"/>
-      </patternFill></fill>
-    </dxf>
-    <!-- 1: Priority Target (light yellow) -->
-    <dxf>
-      <font><color rgb="FF000000"/></font>
-      <fill><patternFill patternType="solid">
-        <fgColor rgb="FFFFEB9C"/><bgColor rgb="FFFFEB9C"/>
-      </patternFill></fill>
-    </dxf>
-    <!-- 2: Stop Receiving (light red) -->
-    <dxf>
-      <font><color rgb="FF000000"/></font>
-      <fill><patternFill patternType="solid">
-        <fgColor rgb="FFFFC7CE"/><bgColor rgb="FFFFC7CE"/>
-      </patternFill></fill>
-    </dxf>
-  </dxfs>
-</styleSheet>`;
-
-    // Add parts to zip
-    zip.file('[Content_Types].xml', contentTypesXml);
-    zip.folder('_rels').file('.rels', rootRelsXml);
-    const xl = zip.folder('xl');
-    xl.file('workbook.xml', workbookXml);
-    xl.folder('_rels').file('workbook.xml.rels', wbRelsXml);
-    xl.folder('worksheets').file('sheet1.xml', sheet1Xml);
-    xl.file('styles.xml', stylesXml);
-
-    // Generate & download
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `PastDue_${yyyy}-${mm}-${dd}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   } catch (err) {
-    console.error('XLSX export failed:', err);
-    alert('Export failed: ' + err.message);
+    console.error('Past Due export failed:', err);
+    alert('Past Due export failed.');
   }
-});
-/* =================== END XLSX EXPORT (auto-width + fixed DXFs + no helper) =================== */
-
-    }
-
-    renderHeader();
-    renderBody();
-    headerEl.addEventListener('click', (e) => {
-      const btn = headerEl.querySelector('#pdToggleBtn');
-      if (btn && e.target === btn) { /* keep default */ }
-     const wasCollapsed = collapsed;
-     collapsed = !collapsed;
-     renderHeader();
-     renderBody();
-     // If we just expanded, collapse the other panel
-     if (!collapsed) collapseOthers('pastDuePanel');
-    });
-    div.appendChild(headerEl);
-    div.appendChild(bodyEl);
-     registerPanel('pastDuePanel', { isExpanded, expand, collapse });
-    return div;
-  };
-
-  /* ===================================================================
-   Search Panel
-  =================================================================== */
-  const searchCtrl = L.control({ position: 'bottomright' });
-  searchCtrl.onAdd = function () {
-    const div = L.DomUtil.create('div');
-    L.DomEvent.disableScrollPropagation(div);
-    L.DomEvent.disableClickPropagation(div);
-    div.id = 'searchPanel';
-    Object.assign(div.style, {
-      background: 'rgba(255,255,255,0.95)',
-      border: '1px solid #ccc',
-      borderRadius: '4px',
-      padding: '6px 10px',
-      margin: '8px',
-      font: '12px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
-      width: '260px',
-      maxHeight: '300px',
-      overflow: 'hidden',
-      transition: 'height 160ms ease, padding 160ms ease'
-    });
-    let collapsed = true;
-    const headerEl = document.createElement('div');
-    const bodyEl = document.createElement('div');    
-   // expose simple API to the accordion
-   function isExpanded() { return !collapsed; }
-   function expand()   { if (collapsed) { collapsed = false; renderHeader(); renderBody(); } }
-   function collapse() { if (!collapsed) { collapsed = true;  renderHeader(); renderBody(); } }
-    function renderHeader() {
-      headerEl.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <span style="font-weight:700">Search Piles</span>
-          <button id="srchToggleBtn"
-            aria-expanded="${!collapsed}"
-            title="${collapsed ? 'Expand' : 'Collapse'}"
-            style="padding:2px 6px;border:1px solid #ccc;border-radius:3px;cursor:default;background:#f8f8f8">
-            ${collapsed ? '▸' : '▾'}
-          </button>
-        </div>
-      `;
-    }
-    function renderBody() {
-      if (collapsed) {
-        bodyEl.innerHTML = '';
-        div.style.height = '24px';
-        div.style.padding = '6px 10px';
-        div.style.pointerEvents = 'auto';
-        return;
-      }
-      bodyEl.innerHTML = `
-        <div style="margin-top:6px;display:flex;align-items:center;justify-content:space-between">
-          <input id="pileSearch" type="text" placeholder="Filter by code/name/material..."
-            style="flex:1;padding:4px 6px;border:1px solid #ddd;border-radius:3px">
-        </div>
-        <ul id="searchList" style="list-style:none;padding:0;margin:8px 0 0 0;max-height:220px;overflow:auto"></ul>
-      `;
-      div.style.height = '300px';
-      div.style.padding = '6px 10px';
-
-      const ul = bodyEl.querySelector('#searchList');
-      const searchInput = bodyEl.querySelector('#pileSearch');
-
-      const allPiles = markers.map(m => {
-        const code = extractPileCode(m.name);
-        const s = code ? stockIndexGlobal[code] : null;
-        const typeLabel = (markerConfig[m.type] && markerConfig[m.type].displayName) ? markerConfig[m.type].displayName : (m.type || '');
-        return {
-          code,
-          name: m.name,
-          type: typeLabel,       // display name
-          rawType: m.type,       // <-- add this raw type key
-          material: (s && s.material) ? s.material : '',
-          marker: m._leaflet
-        };
-      });
-
-      function renderList(filterText = '') {
-        ul.innerHTML = '';
-        const term = filterText.trim().toLowerCase();
-        const items = allPiles.filter(p => {
-          if (!term) return true;
-          return (
-            (p.code && p.code.toLowerCase().includes(term)) ||
-            (p.name && p.name.toLowerCase().includes(term)) ||
-            (p.material && p.material.toLowerCase().includes(term)) ||
-            (p.type && p.type.toLowerCase().includes(term))
-          );
-        }).sort((a,b) => {
-          const ac = a.code || ''; const bc = b.code || '';
-          if (ac !== bc) return ac.localeCompare(bc);
-          return a.name.localeCompare(b.name);
-        });
-
-        items.forEach(p => {
-          const li = document.createElement('li');
-          li.style.padding = '6px 0';
-          li.style.borderBottom = '1px dashed #eee';
-          li.style.cursor = 'default';
-          const sub = p.material ? `${p.type} — ${p.material}` : p.type;
-          li.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <div>
-                <div style="font-weight:600">${p.code || '—'} — ${sub}</div>
-                <div style="color:#555">${p.name}</div>
-              </div>
-              <button style="margin-left:8px;padding:2px 6px;border:1px solid #ccc;border-radius:3px;cursor:pointer">Ping</button>
-            </div>
-          `; 
-          li.addEventListener('click', () => {
-            const target =
-              (p.rawType === 'Coils' && window.burningArea) ? window.burningArea :
-              ((p.rawType === 'Breaking' || p.rawType === 'Unbreakable') && window.breakingArea) ? window.breakingArea :
-              p.marker;
-            if (target) pingMarker(target);
-          });      
-          li.querySelector('button').addEventListener('click', (e) => {
-            e.stopPropagation();
-            const target =
-              (p.rawType === 'Coils' && window.burningArea) ? window.burningArea :
-              ((p.rawType === 'Breaking' || p.rawType === 'Unbreakable') && window.breakingArea) ? window.breakingArea :
-              p.marker;
-            if (target) pingMarker(target);
-          });
-          ul.appendChild(li);
-        });
-      }
-      renderList();
-      searchInput.addEventListener('input', (e) => renderList(e.target.value));
-    }
-
-    renderHeader();
-    renderBody();
-    headerEl.addEventListener('click', (e) => {
-      const btn = headerEl.querySelector('#srchToggleBtn');
-      if (btn && e.target === btn) { /* keep default */ }
-     const wasCollapsed = collapsed;
-     collapsed = !collapsed;
-     renderHeader();
-     renderBody();
-     // If we just expanded, collapse the other panel
-     if (!collapsed) collapseOthers('searchPanel');
-    });
-
-    div.appendChild(headerEl);
-    div.appendChild(bodyEl);
-     registerPanel('searchPanel', { isExpanded, expand, collapse });
-    return div;
-  };
-    searchCtrl.addTo(map);
-    pastDueCtrl.addTo(map);
- if (unknownTypes.size) console.warn('Unknown types:', Array.from(unknownTypes));
-}).catch(err => console.error('Data load failed:', err));
+};
 
 /* ===================================================================
  LAYER CONTROL
