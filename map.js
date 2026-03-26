@@ -1561,7 +1561,7 @@ function isPastDueExempt(marker, stockIndex) {
 
         const icon = markerConfig[p.type]?.icon;
         const iconUrl = icon ? icon.options.iconUrl : '';
-        const iconHtml = iconUrl ? `<img src="${iconUrl}" style="width: 24px; height: 24px; object-fit: contain;" />` : `<div style="width: 24px; height: 24px;"></div>`;
+        const iconHtml = iconUrl ? `<img src="${iconUrl}" style="width: 72px; height: 72px; object-fit: contain;" />` : `<div style="width: 24px; height: 24px;"></div>`;
 
         li.innerHTML = `
           <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
