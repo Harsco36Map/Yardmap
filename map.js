@@ -99,6 +99,10 @@ function pingMarker(marker, options = {}) {
     duration = 800,
     maxRadius = 40
   } = options;
+  
+  // Center map on the pinged marker
+  map.setView(latlng, 19);
+  
   let pulse = 0;
   function makePulse() {
     const circle = L.circle(latlng, {
@@ -153,6 +157,39 @@ const loadCells = {
 };
 
 /* ===================================================================
+ RADIATION LINK MARKER
+=================================================================== */
+const radiationMarker = L.circleMarker([40.79423553252727, -82.53435252152397], {
+  radius: 20,
+  color: "rgba(0,0,0,0.00001)",
+  fillColor: "rgba(0,0,0,0.00001)",
+  fillOpacity: 0.00001,
+  weight: 1,
+  interactive: true
+});
+radiationMarker.addTo(map);
+radiationMarker.on("click", () => {
+  window.open("http://10.141.21.10:8080/ASM/main.jsp", "_blank");
+});
+
+/* ===================================================================
+ HARSCO SHAREPOINT LINK MARKER
+=================================================================== */
+const harscoMarker = L.circleMarker([40.79244226436424, -82.53258714613442], {
+  radius: 20,
+  color: "rgba(0,0,0,0.00001)",
+  fillColor: "rgba(0,0,0,0.00001)",
+  fillOpacity: 0.00001,
+  weight: 1,
+  interactive: true
+})
+  .bindTooltip("Enviri Sharepoint", { permanent: false, direction: 'top' })
+  .addTo(map);
+harscoMarker.on("click", () => {
+  window.open("https://hsconline.sharepoint.com/sites/IX/Pages/IXHome.aspx", "_blank");
+});
+
+/* ===================================================================
  LOAD CELL CLICK HANDLER
 =================================================================== */
 Object.keys(loadCellMarkers).forEach(id => {
@@ -192,7 +229,42 @@ Object.keys(loadCellMarkers).forEach(id => {
   fetchLatestInventoryCsv().then(payload => {
     const d = payload && payload.meta && payload.meta.report_date;
     const banner = document.getElementById('invBanner');
-    if (banner && d) banner.textContent = `Inventory data current as of ${d}`;
+    if (banner && d) {
+      // Format date from "DD-MMM-YYYY HH:MM:SS" to "Month-Day" (e.g., "March-26")
+      const dateStr = d.trim();
+      let formattedDate = dateStr;
+      
+      // Try to parse DD-MMM-YYYY format (e.g., "25-MAR-2026")
+      const dateParts = dateStr.match(/(\d{1,2})-([A-Za-z]{3})-(\d{4})/);
+      if (dateParts) {
+        const day = parseInt(dateParts[1], 10);
+        const monthStr = dateParts[2].toUpperCase();
+        const monthMap = {
+          'JAN': 'January', 'FEB': 'February', 'MAR': 'March', 'APR': 'April',
+          'MAY': 'May', 'JUN': 'June', 'JUL': 'July', 'AUG': 'August',
+          'SEP': 'September', 'OCT': 'October', 'NOV': 'November', 'DEC': 'December'
+        };
+        const monthName = monthMap[monthStr];
+        if (monthName) {
+          formattedDate = `${monthName}-${day}`;
+        }
+      }
+      // Fallback: also try MM/DD/YYYY format (in case data format changes)
+      else {
+        const mdy = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (mdy) {
+          const month = parseInt(mdy[1], 10);
+          const day = parseInt(mdy[2], 10);
+          const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                            'July', 'August', 'September', 'October', 'November', 'December'];
+          if (month >= 1 && month <= 12) {
+            formattedDate = `${monthNames[month - 1]}-${day}`;
+          }
+        }
+      }
+      
+      banner.textContent = `Inventory data current as of ${formattedDate}`;
+    }
   }).catch(err => console.warn('stockData.json meta fetch failed:', err));
 })();
 
@@ -1241,45 +1313,8 @@ function isPastDueExempt(marker, stockIndex) {
   window.pastDue = pastDue;
 
   /* ===================================================================
- Unified Search / Past Due Panel
+ SEARCH PANEL HELPER FUNCTIONS
 =================================================================== */
-const searchCtrl = L.control({ position: 'bottomright' });
-searchCtrl.onAdd = function () {
-  const div = L.DomUtil.create('div');
-  L.DomEvent.disableScrollPropagation(div);
-  L.DomEvent.disableClickPropagation(div);
-
-  div.id = 'searchPanel';
-  Object.assign(div.style, {
-    background: 'rgba(255,255,255,0.95)',
-    border: '1px solid #ccc',
-    borderRadius: '4px',
-    padding: '6px 10px',
-    margin: '8px',
-    font: '12px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
-    width: '260px',
-    maxHeight: '320px',
-    overflow: 'hidden'
-  });
-
-  let collapsed = true;
-  const headerEl = document.createElement('div');
-  const bodyEl = document.createElement('div');
-
-  function renderHeader(countText = '') {
-    headerEl.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <span style="font-weight:700">
-          Search Piles <span style="color:#555">${countText}</span>
-        </span>
-        <button id="srchToggleBtn"
-          style="padding:2px 6px;border:1px solid #ccc;border-radius:3px;background:#f8f8f8">
-          ${collapsed ? '▸' : '▾'}
-        </button>
-      </div>
-    `;
-  }
 
   function getVisiblePiles() {
     if (searchMode === 'pastDue') {
@@ -1290,7 +1325,8 @@ searchCtrl.onAdd = function () {
         marker: p.marker,
         invLbs: p.invLbs,
         lastZero: p.lastZero,
-        ageLabel: p.ageLabel
+        ageLabel: p.ageLabel,
+        type: p.rawType
       }));
     }
 
@@ -1301,41 +1337,197 @@ searchCtrl.onAdd = function () {
         code,
         name: m.name,
         material: s?.material ?? '',
-        marker: m._leaflet
+        marker: m._leaflet,
+        type: m.type
       };
     });
   }
 
-  function renderBody() {
-    if (collapsed) {
-      bodyEl.innerHTML = '';
-      renderHeader('');
-      return;
+  // Helper function to ping piles and their related stations
+  function pingPileWithStation(pile) {
+    if (pile?.marker) {
+      pingMarker(pile.marker);
     }
+    
+    // Ping station markers for special pile types
+    if (pile?.type === 'Coils' && window.burningArea) {
+      pingMarker(window.burningArea);
+    } else if ((pile?.type === 'Breaking' || pile?.type === 'Unbreakable') && window.breakingArea) {
+      pingMarker(window.breakingArea);
+    }
+  }
 
-    bodyEl.innerHTML = `
-      <div style="display:flex;gap:4px;margin-bottom:6px">
-        <button id="modeAll">All</button>
-        <button id="modePast">Past Due (${pastDue.length})</button>
-        <button id="pdExport" style="margin-left:auto;display:none">Export</button>
-      </div>
-      <input id="pileSearch"
-        placeholder="Filter piles..."
-        style="width:100%;padding:4px 6px;margin-bottom:6px;border:1px solid #ddd;border-radius:3px" />
-      <ul id="pileList"
-        style="list-style:none;padding:0;margin:0;max-height:220px;overflow:auto"></ul>
+  /* ===================================================================
+ SEARCH MODAL - Magnifying Glass in Bottom Right
+=================================================================== */
+
+  function createSearchModal() {
+    // Backdrop for closing modal on click outside
+    const backdrop = document.createElement('div');
+    backdrop.id = 'searchModalBackdrop';
+    backdrop.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 899;
+      pointer-events: none;
     `;
 
-    const listEl = bodyEl.querySelector('#pileList');
-    const input = bodyEl.querySelector('#pileSearch');
-    const btnAll = bodyEl.querySelector('#modeAll');
-    const btnPast = bodyEl.querySelector('#modePast');
-    const btnExport = bodyEl.querySelector('#pdExport');
-    let activeIndex = -1;
+    // Modal container - positioned in bottom right
+    const modal = document.createElement('div');
+    modal.id = 'searchModal';
+    modal.style.cssText = `
+      position: fixed;
+      bottom: 8px;
+      right: 8px;
+      background: rgba(255, 255, 255, 0.98);
+      width: 500px;
+      max-height: 45vh;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      display: flex;
+      flex-direction: column;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      font-size: 12px;
+      z-index: 900;
+      pointer-events: auto;
+    `;
 
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = `
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #ddd;
+      padding: 12px 16px;
+      font-weight: 700;
+      font-size: 14px;
+    `;
+    header.innerHTML = `
+      <span>Search Piles <span id="pileCount" style="color: #666; font-weight: normal;">(—)</span></span>
+      <button id="searchModalClose" style="
+        background: #f0f0f0;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 24px;
+        color: #333;
+        cursor: pointer;
+        padding: 2px 8px;
+        width: auto;
+        height: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        transition: all 0.2s ease;
+        line-height: 1;
+      " onmouseover="this.style.background='#e0e0e0'; this.style.color='#000';" onmouseout="this.style.background='#f0f0f0'; this.style.color='#333';">×</button>
+    `;
+
+    // Mode buttons
+    const modeContainer = document.createElement('div');
+    modeContainer.style.cssText = `
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      border-bottom: 1px solid #ddd;
+      flex-wrap: wrap;
+    `;
+    modeContainer.innerHTML = `
+      <button id="modeAll" style="
+        padding: 6px 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #f8f8f8;
+        cursor: pointer;
+        font-weight: 700;
+      ">All</button>
+      <button id="modePast" style="
+        padding: 6px 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #f8f8f8;
+        cursor: pointer;
+      ">Past Due (${pastDue.length})</button>
+      <button id="pdExport" style="
+        padding: 6px 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #f8f8f8;
+        cursor: pointer;
+        margin-left: auto;
+        display: none;
+      ">Export</button>
+    `;
+
+    // Search input
+    const inputContainer = document.createElement('div');
+    inputContainer.id = 'inputContainer';
+    inputContainer.style.cssText = `
+      padding: 12px 16px;
+      border-bottom: 1px solid #ddd;
+    `;
+    inputContainer.innerHTML = `
+      <input id="pileSearch"
+        placeholder="Filter piles..."
+        style="
+          width: 100%;
+          padding: 8px 12px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          box-sizing: border-box;
+          font-size: 12px;
+        " />
+    `;
+
+    // Pile list container
+    const listContainer = document.createElement('div');
+    listContainer.style.cssText = `
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+    `;
+
+    const pileList = document.createElement('ul');
+    pileList.id = 'pileList';
+    pileList.style.cssText = `
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    `;
+
+    listContainer.appendChild(pileList);
+
+    // Assemble modal
+    modal.appendChild(header);
+    modal.appendChild(modeContainer);
+    modal.appendChild(inputContainer);
+    modal.appendChild(listContainer);
+
+    // Append both modal and backdrop to body (modal is positioned fixed independently)
+    document.body.appendChild(backdrop);
+    document.body.appendChild(modal);
+
+    // State
+    let activeIndex = -1;
+    let currentFilteredRows = []; // Store filtered rows for keyboard navigation matching
+    const input = inputContainer.querySelector('#pileSearch');
+    const btnAll = modeContainer.querySelector('#modeAll');
+    const btnPast = modeContainer.querySelector('#modePast');
+    const btnExport = modeContainer.querySelector('#pdExport');
+    const closeBtn = header.querySelector('#searchModalClose');
+
+    // Set modal to be focusable for keyboard events
+    modal.tabIndex = 0;
+    modal.focus();
+
+    // Render pile list
     function renderList() {
       const term = input.value.trim().toLowerCase();
-      listEl.innerHTML = '';
+      pileList.innerHTML = '';
 
       let rows = getVisiblePiles();
       if (searchMode === 'all' && term) {
@@ -1346,177 +1538,212 @@ searchCtrl.onAdd = function () {
         );
       }
 
-function handlePanelKeydown(e) {
-  const items = listEl.children;
-  if (!items.length) return;
+      // Store filtered rows for keyboard navigation
+      currentFilteredRows = rows;
 
-  // ⬇ Arrow navigation
-  if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    e.stopPropagation();
-
-    activeIndex = Math.min(activeIndex + 1, items.length - 1);
-    items[activeIndex].scrollIntoView({ block: 'nearest' });
-    renderList();
-    return;
-  }
-
-  if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    e.stopPropagation();
-
-    activeIndex = Math.max(activeIndex - 1, 0);
-    items[activeIndex].scrollIntoView({ block: 'nearest' });
-    renderList();
-    return;
-  }
-
-  // ⏎ Activate
-  if (e.key === 'Enter' && activeIndex >= 0) {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const p = getVisiblePiles()[activeIndex];
-    if (p?.marker) pingMarker(p.marker);
-    return;
-  }
-
-  // ⎋ Close panel
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    e.stopPropagation();
-
-    collapsed = true;
-    renderBody();
-    map.keyboard.enable();
-    headerEl.focus();
-  }
-}
-      renderHeader(`(${rows.length})`);
+      // Update pile count in header
+      const pileCountEl = document.getElementById('pileCount');
+      if (pileCountEl) {
+        pileCountEl.textContent = `(${rows.length})`;
+      }
 
       rows.forEach((p, idx) => {
-  const li = document.createElement('li');
-  li.style.padding = '6px 0';
-  li.style.borderBottom = '1px dashed #eee';
-  li.style.cursor = 'pointer';
+        const li = document.createElement('li');
+        li.style.cssText = `
+          padding: 12px 16px;
+          border-bottom: 1px solid #f0f0f0;
+          cursor: pointer;
+          ${idx === activeIndex ? 'background: #e8f0ff;' : ''}
+        `;
 
-  if (idx === activeIndex) {
-    li.style.background = '#e8f0ff';
-  }
+        const lz = p.lastZero ?? (p.code && stockIndexGlobal[p.code]?.last_zero_date);
+        const codeStyle = lastZeroColor(lz);
 
-  li.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <div>
-        <div style="font-weight:600;${(() => {
-          const lz = p.lastZero ??
-            (p.code && stockIndexGlobal[p.code]?.last_zero_date);
-          return lastZeroColor(lz);
-        })()}">
-          ${p.code ?? '—'} — ${p.material}
-        </div>
-        <div style="color:#555">${p.name}</div>
-      </div>
-      <button
-        style="margin-left:8px;padding:2px 6px;border:1px solid #ccc;
-               border-radius:3px;cursor:pointer;background:#f8f8f8">
-        Ping
-      </button>
-    </div>
-  `;
+        const icon = markerConfig[p.type]?.icon;
+        const iconUrl = icon ? icon.options.iconUrl : '';
+        const iconHtml = iconUrl ? `<img src="${iconUrl}" style="width: 24px; height: 24px; object-fit: contain;" />` : `<div style="width: 24px; height: 24px;"></div>`;
 
-  li.addEventListener('click', () => {
-    activeIndex = idx;
-    renderList();
-    if (p.marker) pingMarker(p.marker);
-  });
+        li.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
+            <div style="flex: 1;">
+              <div style="font-weight: 600; ${codeStyle}">
+                ${p.code ?? '—'} — ${p.material}
+              </div>
+              <div style="color: #666; margin-top: 4px;">
+                ${p.name}
+              </div>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+              ${iconHtml}
+              <button style="
+                padding: 4px 8px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                background: #f8f8f8;
+                cursor: pointer;
+                font-size: 11px;
+                white-space: nowrap;
+              ">Ping</button>
+            </div>
+          </div>
+        `;
 
-  const btn = li.querySelector('button');
-  btn.addEventListener('click', e => {
-    e.stopPropagation();
-    activeIndex = idx;
-    renderList();
-    if (p.marker) pingMarker(p.marker);
-  });
+        li.addEventListener('click', () => {
+          activeIndex = idx;
+          renderList();
+          pingPileWithStation(p);
+          modal.focus();
+        });
 
-  listEl.appendChild(li);
-});
+        const btn = li.querySelector('button');
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          pingPileWithStation(p);
+          modal.focus();
+        });
+
+        pileList.appendChild(li);
+      });
+
+      // Restore focus to modal after rendering
+      if (document.activeElement !== input) {
+        modal.focus();
+      }
     }
-function setMode(mode) {
-  searchMode = mode;
-  btnAll.style.fontWeight = mode === 'all' ? '700' : '';
-  btnPast.style.fontWeight = mode === 'pastDue' ? '700' : '';
-  btnExport.style.display = mode === 'pastDue' ? '' : 'none';
-  input.style.display = mode === 'pastDue' ? 'none' : '';
-  if (mode === 'all') {
-    input.focus();
-  }
-  if (mode === 'pastDue') {
-    input.value = '';
-    activeIndex = -1;
-  }
-  renderList();
-}
+
+    // Set mode
+    function setMode(mode) {
+      searchMode = mode;
+      activeIndex = -1; // Reset index when changing mode
+      btnAll.style.fontWeight = mode === 'all' ? '700' : '';
+      btnPast.style.fontWeight = mode === 'pastDue' ? '700' : '';
+      btnExport.style.display = mode === 'pastDue' ? '' : 'none';
+      inputContainer.style.display = mode === 'pastDue' ? 'none' : '';
+      input.style.display = mode === 'pastDue' ? 'none' : '';
+      if (mode === 'all') {
+        input.focus();
+      }
+      if (mode === 'pastDue') {
+        input.value = '';
+        modal.focus();
+      }
+      renderList();
+    }
+
+    // Event listeners
     btnAll.onclick = () => setMode('all');
     btnPast.onclick = () => setMode('pastDue');
     btnExport.onclick = () => exportPastDueXlsx();
-
     input.oninput = renderList;
-    input.addEventListener('keydown', e => {
-  const items = listEl.children;
-  if (!items.length) return;
 
-  if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    activeIndex = Math.min(activeIndex + 1, items.length - 1);
-    items[activeIndex].scrollIntoView({ block: 'nearest' });
-    renderList();
-  }
+    // Keyboard navigation - attach to modal for consistent behavior in both modes
+    function handleKeydown(e) {
+      const items = pileList.children;
+      if (!items.length) return;
 
-  if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    activeIndex = Math.max(activeIndex - 1, 0);
-    items[activeIndex].scrollIntoView({ block: 'nearest' });
-    renderList();
-  }
-
-  if (e.key === 'Enter' && activeIndex >= 0) {
-    e.preventDefault();
-    const p = getVisiblePiles()[activeIndex];
-    if (p?.marker) pingMarker(p.marker);
-  }
-});
-
-    setMode(searchMode);
-  }
-
-headerEl.onclick = () => {
-  const wasCollapsed = collapsed;
-  collapsed = !collapsed;
-  renderBody();
-
-  if (wasCollapsed && !collapsed) {
-    map.keyboard.disable();
-    requestAnimationFrame(() => {
-      if (searchMode === 'all') {
-        input?.focus();
-      } else {
-        div.focus();
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        activeIndex = Math.min(activeIndex + 1, items.length - 1);
+        items[activeIndex].scrollIntoView({ block: 'nearest' });
+        renderList();
+        return;
       }
-    });
-  } else if (!wasCollapsed && collapsed) {
-    map.keyboard.enable();
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        activeIndex = Math.max(activeIndex - 1, 0);
+        items[activeIndex].scrollIntoView({ block: 'nearest' });
+        renderList();
+        return;
+      }
+
+      if (e.key === 'Enter' && activeIndex >= 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        const p = currentFilteredRows[activeIndex];
+        if (p) {
+          pingPileWithStation(p);
+        }
+        return;
+      }
+
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSearchModal();
+        return;
+      }
+    }
+
+    input.addEventListener('keydown', handleKeydown);
+    modal.addEventListener('keydown', handleKeydown);
+
+    // Initialize
+    setMode(searchMode);
+
+    // Close handler
+    function closeSearchModal() {
+      modal.remove();
+      backdrop.remove();
+      map.keyboard.enable();
+    }
+
+    closeBtn.onclick = closeSearchModal;
+
+    return closeSearchModal;
   }
-};
 
-  renderHeader('');
-  renderBody();
+  /* ===================================================================
+ FLOATING MAGNIFYING GLASS BUTTON
+=================================================================== */
 
-  div.appendChild(headerEl);
-  div.appendChild(bodyEl);
-  return div;
-};
+  const searchBtnCtrl = L.control({ position: 'bottomright' });
+  searchBtnCtrl.onAdd = function () {
+    const container = L.DomUtil.create('div');
+    L.DomEvent.disableScrollPropagation(container);
+    L.DomEvent.disableClickPropagation(container);
 
-searchCtrl.addTo(map);
+    const btn = document.createElement('button');
+    btn.id = 'searchPanelToggle';
+    btn.title = 'Search Piles';
+    btn.style.cssText = `
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.95);
+      border: 2px solid #999;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+      transition: all 0.2s ease;
+      padding: 0;
+    `;
+    btn.innerHTML = '🔍';
+
+    btn.onmouseover = () => {
+      btn.style.background = 'rgba(255, 255, 255, 1)';
+      btn.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.25)';
+    };
+    btn.onmouseout = () => {
+      btn.style.background = 'rgba(255, 255, 255, 0.95)';
+      btn.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.15)';
+    };
+
+    btn.onclick = () => {
+      map.keyboard.disable();
+      createSearchModal();
+    };
+
+    container.appendChild(btn);
+    return container;
+  };
+
+  searchBtnCtrl.addTo(map);
 
   /* ===================================================================
    CONSUMPTION CSV PARSER

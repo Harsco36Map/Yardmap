@@ -35,6 +35,35 @@
         #contextMenu li {
             padding: 5px 10px;
             cursor: pointer;}
+
+        /* Search Modal Responsive Styles */
+        #searchModal {
+            position: fixed;
+            bottom: 8px;
+            right: 8px;
+        }
+        
+        @media (max-width: 599px) {
+            #searchModal {
+                width: calc(100vw - 16px);
+                max-width: calc(100vw - 16px);
+            }
+        }
+
+        @media (min-width: 600px) {
+            #searchModal {
+                width: 500px;
+            }
+        }
+
+        /* Ensure button styling consistency */
+        #searchModalBackdrop button {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        }
+
+        #searchPanelToggle:active {
+            transform: scale(0.95);
+        }
     </style>
 </head>
 <body>
