@@ -85,6 +85,12 @@ function collapseOthers(exceptId) {
 let allMarkersData = [];
 let stockIndexGlobal = {};
 let searchMode = 'all'; // 'all' | 'pastDue'
+let isSearchModalOpen = false;
+
+// Shared styles
+const POPUP_CONTAINER_STYLE = 'min-width:420px;max-width:100%;width:auto;';
+const ACTIVITY_CONTAINER_STYLE = 'display:none;max-height:320px;overflow-y:auto;overflow-x:hidden;width:auto;box-sizing:border-box;padding:4px;background:#fff';
+const ACTIVITY_TABLE_STYLE = 'width:auto;min-width:100%;font-size:12px;border-collapse:collapse';
 
 /* ===================================================================
  ATTENTION "PING" EFFECT
@@ -168,6 +174,7 @@ const radiationMarker = L.circleMarker([40.79423553252727, -82.53435252152397], 
   interactive: true
 });
 radiationMarker.addTo(map);
+radiationMarker.bindTooltip("ASMIV Panel", { permanent: false, direction: 'top', offset: [0, -22] });
 radiationMarker.on("click", () => {
   window.open("http://10.141.21.10:8080/ASM/main.jsp", "_blank");
 });
@@ -274,18 +281,143 @@ Object.keys(loadCellMarkers).forEach(id => {
    =================================================================== */
 
 // 1) Config -----------------------------------------------------------
-const burningCsvUrl = 'BurningTotals.csv';
+const totalsXlsxUrl = 'Production.xlsx';
 const burningLatLng = [40.79365495632949, -82.53501357377355];
-const breakingCsvUrl = 'BreakingTotals.csv';
 const breakingLatLng = [40.79408763021845, -82.5388475264302];
 
 // 2) Cache + helpers --------------------------------------------------
+let totalsWorkbookCache = { at: 0, workbook: null };
 let burningCache = { at: 0, data: null };
 let breakingCache = { at: 0, data: null };
+let latestInventoryPeriod = { year: null, month: null };
 
 function fmtInt(n)  { return (typeof n === 'number' && isFinite(n)) ? Math.round(n).toLocaleString('en-US') : '—'; }
+
+function parseInventoryReportDate(dateStr) {
+  if (!dateStr) return null;
+  let parsed = null;
+  const s = String(dateStr).trim();
+
+  // DD-MMM-YYYY or DD-MMM-YYYY HH:MM:SS
+  const dmy = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const m = dmy[2].toUpperCase();
+    const year = Number(dmy[3]);
+    const monthMap = {
+      JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
+      JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11
+    };
+    if (!Number.isNaN(day) && !Number.isNaN(year) && monthMap.hasOwnProperty(m)) {
+      parsed = new Date(year, monthMap[m], day);
+    }
+  }
+
+  if (!parsed) {
+    const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mdy) {
+      const month = Number(mdy[1]) - 1;
+      const day = Number(mdy[2]);
+      const year = Number(mdy[3]);
+      if (!Number.isNaN(month) && !Number.isNaN(day) && !Number.isNaN(year)) {
+        parsed = new Date(year, month, day);
+      }
+    }
+  }
+
+  if (!parsed) {
+    const dt = new Date(s);
+    if (isFinite(dt.getTime())) { parsed = dt; }
+  }
+
+  return parsed;
+}
+
+function getCurrentInventoryPeriod() {
+  const year = Number.isInteger(latestInventoryPeriod.year) ? latestInventoryPeriod.year : new Date().getFullYear();
+  const month = Number.isInteger(latestInventoryPeriod.month) ? latestInventoryPeriod.month : new Date().getMonth();
+  return { year, month };
+}
+
+function parseXlsxDateCell(value) {
+  if (value instanceof Date && isFinite(value.getTime())) return value;
+  const v = String(value || '').trim();
+  if (!v) return null;
+  // Prefer inventory parser first
+  const parsed = parseInventoryReportDate(v);
+  if (parsed) return parsed;
+  const dt = new Date(v);
+  return isFinite(dt.getTime()) ? dt : null;
+}
+
+function findRepeatedBlockStartIndexes(headers, template) {
+  const canon = headers.map(h => String(h || '').trim().toLowerCase());
+  const templateL = template.map(t => String(t || '').trim().toLowerCase());
+  const starts = [];
+  for (let c = 0; c <= canon.length - templateL.length; c++) {
+    let matched = true;
+    for (let j = 0; j < templateL.length; j++) {
+      if (canon[c + j] !== templateL[j]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) starts.push(c);
+  }
+  return starts;
+}
+
+function downloadCsvFromRows(filename, rows, headers) {
+  if (!Array.isArray(rows)) return;
+  const escape = val => {
+    const text = String(val ?? '');
+    return '"' + text.replace(/"/g, '""') + '"';
+  };
+
+  const lines = [headers.map(escape).join(',')];
+  for (const r of rows) {
+    const row = headers.map(h => escape(r[h]));
+    lines.push(row.join(','));
+  }
+
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  URL.revokeObjectURL(a.href);
+  document.body.removeChild(a);
+}
+
 function fmtTons(n, d = 3) { return (typeof n === 'number' && isFinite(n)) ? n.toFixed(d) : '—'; }
 function fmtTons2(n, d = 2) { return (typeof n === 'number' && isFinite(n)) ? n.toFixed(d) : '—'; }
+
+function findSheetByName(wb, name) {
+  if (!wb || !Array.isArray(wb.SheetNames)) return null;
+  const found = wb.SheetNames.find(n => n.trim().toLowerCase() === String(name).trim().toLowerCase());
+  return found ? wb.Sheets[found] : null;
+}
+
+async function loadTotalsWorkbook(force = false) {
+  const now = Date.now();
+  if (!force && totalsWorkbookCache.workbook && (now - totalsWorkbookCache.at) < 120000) {
+    return totalsWorkbookCache.workbook;
+  }
+
+  if (!window.XLSX || !window.XLSX.read) {
+    throw new Error('XLSX library not available');
+  }
+
+  const res = await fetch(totalsXlsxUrl, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Failed to fetch ${totalsXlsxUrl}: ${res.status}`);
+  const data = await res.arrayBuffer();
+  const workbook = window.XLSX.read(data, { type: 'array' });
+
+  totalsWorkbookCache = { at: now, workbook };
+  return workbook;
+}
 
 // ===================== GLOBAL HELPERS (must be above builders) =====================
 
@@ -432,6 +564,16 @@ async function fetchLatestInventoryCsv() {
     };
   }
 
+  const parsedInventoryDate = parseInventoryReportDate(report_date);
+  if (parsedInventoryDate) {
+    latestInventoryPeriod.year = parsedInventoryDate.getFullYear();
+    latestInventoryPeriod.month = parsedInventoryDate.getMonth();
+  } else {
+    const now = new Date();
+    latestInventoryPeriod.year = now.getFullYear();
+    latestInventoryPeriod.month = now.getMonth();
+  }
+
   return {
     meta: { report_date },
     stock
@@ -444,58 +586,111 @@ async function fetchBurningTotals(force = false) {
     return burningCache.data;
   }
 
-  const res = await fetch(burningCsvUrl, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`Failed to fetch ${burningCsvUrl}: ${res.status}`);
-  const text = await res.text();
-
-  const lines = text.split(/\r?\n/).filter(Boolean);
-  if (!lines.length) throw new Error('BurningTotals.csv is empty.');
-
   const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const p = lines[i].split(',');
-    if (p.length < 7) continue;
+  const num = v => {
+    const x = Number((v || '').toString().trim());
+    return Number.isFinite(x) ? x : null;
+  };
 
-    const dateStr = (p[0] || '').trim();
-    if (!dateStr) continue;
+  const workbook = await loadTotalsWorkbook(force);
+  const sheet = findSheetByName(workbook, 'Burning');
+  if (!sheet) throw new Error('Burning sheet not found in Production.xlsx');
 
-    const dt = new Date(dateStr);
-    if (!isFinite(dt.getTime())) continue;
-
-    const num = v => {
-      const x = Number((v || '').trim());
-      return Number.isFinite(x) ? x : null;
-    };
-
-    rows.push({
-      date: dt,
-      dateLabel: dateStr,
-      netLbs: num(p[1]),
-      from: (p[2] || '').trim(),
-      to: (p[3] || '').trim(),
-      netTons: num(p[4]),
-      cuts: num(p[5]),
-      billableTons: num(p[6])
-    });
+  const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+  if (!Array.isArray(data) || data.length < 2) {
+    throw new Error('Burning sheet has no rows');
   }
 
-  rows.sort((a,b)=>b.date-a.date);
+  const headers = data[0].map(h => String(h || '').trim());
+  const template = ['Date','Net(lbs)','From','To','NetTons','# of Cuts','Billable Tons'];
+  const blockStarts = findRepeatedBlockStartIndexes(headers, template);
 
-  let totalLbs = 0, totalTons = 0, totalCuts = 0, totalBillable = 0, latest=null;
-  for (const r of rows) {
-    totalLbs      += r.netLbs || 0;
-    totalTons     += r.netTons || 0;
-    totalCuts     += r.cuts   || 0;
+  const fallbackCol = headers.map(h => String(h).toLowerCase());
+  const colIndex = names => {
+    const lowerNames = names.map(n => String(n).trim().toLowerCase());
+    return fallbackCol.findIndex(h => lowerNames.includes(h));
+  };
+
+  const fallbackDateCol = colIndex(['date','date/time','datetime']);
+  const fallbackNetLbsCol = colIndex(['net(lbs)','net lbs','net','netlbs']);
+  const fallbackFromCol = colIndex(['from','from pile #','from pile']);
+  const fallbackToCol = colIndex(['to','to pile #','to pile']);
+  const fallbackNetTonsCol = colIndex(['nettons','net tons','net_tons']);
+  const fallbackCutsCol = colIndex(['# of cuts','cuts','cut']);
+  const fallbackBillableCol = colIndex(['billable tons','billabletons','billable']);
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!Array.isArray(row)) continue;
+
+    if (blockStarts.length > 0) {
+      for (const start of blockStarts) {
+        const dateCell = row[start];
+        const dt = parseXlsxDateCell(dateCell);
+        if (!dt) continue;
+        const dateLabel = String(dateCell ?? '').trim();
+
+        rows.push({
+          date: dt,
+          dateLabel,
+          netLbs: num(row[start + 1] ?? ''),
+          from: String(row[start + 2] || '').trim(),
+          to: String(row[start + 3] || '').trim(),
+          netTons: num(row[start + 4] ?? ''),
+          cuts: num(row[start + 5] ?? ''),
+          billableTons: num(row[start + 6] ?? '')
+        });
+      }
+    } else {
+      const dateCell = row[fallbackDateCol];
+      const dt = parseXlsxDateCell(dateCell);
+      if (!dt) continue;
+      const dateLabel = String(dateCell ?? '').trim();
+
+      rows.push({
+        date: dt,
+        dateLabel,
+        netLbs: num(row[fallbackNetLbsCol] ?? ''),
+        from: String(row[fallbackFromCol] || '').trim(),
+        to: String(row[fallbackToCol] || '').trim(),
+        netTons: num(row[fallbackNetTonsCol] ?? ''),
+        cuts: num(row[fallbackCutsCol] ?? ''),
+        billableTons: num(row[fallbackBillableCol] ?? '')
+      });
+    }
+  }
+
+  rows.sort((a, b) => b.date - a.date);
+
+  const { year: filterYear, month: filterMonth } = getCurrentInventoryPeriod();
+  const monthRows = rows.filter(r =>
+    r.date.getFullYear() === filterYear && r.date.getMonth() === filterMonth
+  );
+
+  let totalLbs = 0, totalTons = 0, totalCuts = 0, totalBillable = 0, latest = null;
+  for (const r of monthRows) {
+    totalLbs += r.netLbs || 0;
+    totalTons += r.netTons || 0;
+    totalCuts += r.cuts || 0;
     totalBillable += r.billableTons || 0;
     if (!latest || r.date > latest) latest = r.date;
   }
 
   const payload = {
-    rows,
+    rows: monthRows,
+    allRows: rows,
+    month: {
+      year: filterYear,
+      monthIndex: filterMonth,
+      totalMonthTons: monthRows.reduce((sum, r) => sum + (r.netTons || 0), 0),
+      totalMonthLbs: totalLbs,
+      rowCount: monthRows.length
+    },
     totals: { netLbs: totalLbs, netTons: totalTons, cuts: totalCuts, billableTons: totalBillable },
     latestDateLabel: latest ? latest.toISOString().slice(0,10) : '—'
   };
 
+  window.currentBurningSheetRows = monthRows;
   burningCache = { at: now, data: payload };
   return payload;
 }
@@ -506,92 +701,108 @@ async function fetchBreakingTotals(force = false) {
     return breakingCache.data;
   }
 
-  const res = await fetch(breakingCsvUrl, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`Failed to fetch ${breakingCsvUrl}: ${res.status}`);
-
-  const text = await res.text();
-  const lines = text.split(/\r?\n/).filter(Boolean);
-  if (!lines.length) throw new Error('BreakingTotals.csv is empty.');
-
-  // CSV layout per your generator:
-  // DATE,COMMODITY,NET,NET TONS,FROM PILE #,TO PILE #
-  // ... detail rows ...
-  // ,TOTAL LBS,<sum_lbs>,,,
-  // ,TOTAL NET TONS,,<sum_tons>,,,
-
   const rows = [];
   const toNum = (v) => {
-    const x = Number((v || '').trim());
+    const x = Number((v || '').toString().trim());
     return Number.isFinite(x) ? x : null;
   };
 
-  // Parse detail lines (skip header, skip the totals lines)
-  for (let i = 1; i < lines.length; i++) {
-    const p = lines[i].split(',');
-    // safety: minimum columns
-    if (p.length < 6) continue;
+  const workbook = await loadTotalsWorkbook(force);
+  const sheet = findSheetByName(workbook, 'Breaking');
+  if (!sheet) throw new Error('Breaking sheet not found in Production.xlsx');
 
-    const label = (p[1] || '').trim().toUpperCase();
-    if (label === 'TOTAL LBS' || label === 'TOTAL NET TONS') {
-      // handled below in totals pass
-      continue;
-    }
-
-    const dateStr = (p[0] || '').trim();
-    if (!dateStr) continue;
-    const dt = new Date(dateStr);
-    if (!isFinite(dt.getTime())) continue;
-
-    const material = (p[1] || '').trim();   // COMMODITY
-    const netLbs   = toNum(p[2]);           // NET
-    const netTons  = toNum(p[3]);           // NET TONS
-    const from     = (p[4] || '').trim();   // FROM PILE #
-    const to       = (p[5] || '').trim();   // TO PILE #
-
-    rows.push({ date: dt, dateLabel: dateStr, from, to, netTons, netLbs, material });
+  const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+  if (!Array.isArray(data) || data.length < 2) {
+    throw new Error('Breaking sheet has no rows');
   }
 
-  // Extract totals (by label, anywhere in file)
-  let totalLbs = null;
-  let totalTons = null;
-  for (let i = 1; i < lines.length; i++) {
-    const p = lines[i].split(',');
-    if (p.length < 2) continue;
-    const label = (p[1] || '').trim().toUpperCase();
-    if (label === 'TOTAL LBS') {
-      totalLbs = toNum(p[2]);            // pounds in column C
-    } else if (label === 'TOTAL NET TONS') {
-      totalTons = toNum(p[3]);           // tons in column D
+  const headers = data[0].map(h => String(h || '').trim());
+  const template = ['Date','Commodity','Net','Net Tons','From Pile #','To Pile #'];
+  const blockStarts = findRepeatedBlockStartIndexes(headers, template);
+
+  const fallbackCol = headers.map(h => String(h).toLowerCase());
+  const colIndex = names => {
+    const lowerNames = names.map(n => String(n).trim().toLowerCase());
+    return fallbackCol.findIndex(h => lowerNames.includes(h));
+  };
+
+  const dateCol = colIndex(['date','date/time','datetime']);
+  const commodityCol = colIndex(['commodity','material']);
+  const netLbsCol = colIndex(['net','net lbs','netlbs']);
+  const netTonsCol = colIndex(['net tons','nettons','net_tons']);
+  const fromCol = colIndex(['from','from pile #','from pile']);
+  const toCol = colIndex(['to','to pile #','to pile']);
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!Array.isArray(row)) continue;
+
+    if (blockStarts.length > 0) {
+      for (const start of blockStarts) {
+        const dateCell = row[start];
+        const dt = parseXlsxDateCell(dateCell);
+        if (!dt) continue;
+        const dateLabel = String(dateCell ?? '').trim();
+
+        rows.push({
+          date: dt,
+          dateLabel,
+          material: String(row[start + 1] || '').trim(),
+          netLbs: toNum(row[start + 2] ?? ''),
+          netTons: toNum(row[start + 3] ?? ''),
+          from: String(row[start + 4] || '').trim(),
+          to: String(row[start + 5] || '').trim()
+        });
+      }
+    } else {
+      const dateCell = row[dateCol];
+      const dt = parseXlsxDateCell(dateCell);
+      if (!dt) continue;
+
+      const dateLabel = String(dateCell ?? '').trim();
+      rows.push({
+        date: dt,
+        dateLabel,
+        material: String(row[commodityCol] || '').trim(),
+        netLbs: toNum(row[netLbsCol] ?? ''),
+        netTons: toNum(row[netTonsCol] ?? ''),
+        from: String(row[fromCol] || '').trim(),
+        to: String(row[toCol] || '').trim()
+      });
     }
   }
 
-  // Sort newest first for activity list
   rows.sort((a, b) => b.date - a.date);
 
-  // Optional month metadata (kept for your UI; not used for the new summary line)
-  const nowD = new Date();
-  const Y = nowD.getFullYear(), M = nowD.getMonth();
-  const monthRows = rows.filter(r => r.date.getFullYear() === Y && r.date.getMonth() === M);
-  const materialsTouched = Array.from(new Set(
-    monthRows.map(r => (r.material || '').trim()).filter(Boolean)
-  )).sort();
+  const { year: filterYear, month: filterMonth } = getCurrentInventoryPeriod();
+  const monthRows = rows.filter(r =>
+    r.date.getFullYear() === filterYear && r.date.getMonth() === filterMonth
+  );
+
+  let totalLbs = 0;
+  let totalTons = 0;
+  for (const r of monthRows) {
+    totalLbs += r.netLbs || 0;
+    totalTons += r.netTons || 0;
+  }
 
   const payload = {
-    rows,
+    rows: monthRows,
+    allRows: rows,
     month: {
-      year: Y,
-      monthIndex: M,
-      // retain legacy field (still useful elsewhere), but now you won’t rely on it for the summary
-      totalMonthTons: monthRows.reduce((sum, r) => sum + (r.netTons || 0), 0),
-      materialsTouched,
+      year: filterYear,
+      monthIndex: filterMonth,
+      totalMonthTons: totalTons,
+      totalMonthLbs: totalLbs,
       rowCount: monthRows.length
     },
     totals: {
-      totalLbs,   // from CSV TOTAL LBS
-      totalTons   // from CSV TOTAL NET TONS
+      totalLbs,
+      totalTons
     }
   };
 
+  window.currentBreakingSheetRows = monthRows;
   breakingCache = { at: now, data: payload };
   return payload;
 }
@@ -691,42 +902,53 @@ const unprepLbsText  = isFinite(unprepTotalLbs) ? unprepTotalLbs.toLocaleString(
 const unprepTonsText = isFinite(unprepTotalLbs) ? (unprepTotalLbs / 2000).toFixed(2) : '—';
 
 const summary = `
-  <div style="margin-bottom:8px">
-    <table style="width:100%;font-size:12px;line-height:1.3;border-collapse:collapse">
+  <div style="margin-bottom:8px; text-align:center">
+    <table style="width:auto;font-size:12px;line-height:1.3;border-collapse:collapse;margin:0 auto;text-align:left">
       <tr>
         <td style="color:#666;padding:2px 6px">Total Unprep Inventory</td>
         <td style="text-align:right;padding:2px 6px">
-          <span>${unprepLbsText}</span> <span style="color:#555">(${unprepTonsText} tons)</span>
+          <b>${unprepLbsText}</b> <span style="color:#555"><b>(${unprepTonsText} tons)</b></span>
         </td>
       </tr>
       <tr>
         <td style="color:#666;padding:2px 6px">Total Processed</td>
         <td style="text-align:right;padding:2px 6px">
-          <span>${totalProcessedText}</span>
+          <b>${totalProcessedText}</b>
         </td>
       </tr>
     </table>
   </div>
 `;
 
-  // Activity rows (you can choose monthRows only; here we show ALL rows like Burning)
-  const rowsHtml = payload.rows.map(r => `
+// Activity rows - ALL for current month
+  const rowsHtml = (payload.rows || []).map(r => `
     <tr>
       <td style="padding:2px 6px;white-space:nowrap">${esc(r.dateLabel)}</td>
-      <td style="padding:2px 6px">${esc(r.from)} → ${esc(r.to)}</td>
+      <td style="padding:2px 6px;text-align:center;white-space:nowrap">${esc(r.from)}</td>
+      <td style="padding:2px 6px;text-align:center;white-space:nowrap">→</td>
+      <td style="padding:2px 6px;white-space:nowrap">${esc(r.to)}</td>
       <td style="padding:2px 6px;text-align:right">${fmtTons2(r.netTons, 3)}</td>
       <td style="padding:2px 6px">${esc(r.material || '')}</td>
     </tr>
   `).join('');
 
+  const rowCount = (payload.rows || []).length;
+  const showCountText = rowCount > 0 ? `<div style="font-size:11px;color:#999;margin:4px 0;">${rowCount} transfers this month</div>` : '';
+  
+  // Store totals globally for CSV export
+  window.currentBreakingTotals = payload.totals || {};
+
   
 const activity = `
-  <div id="breakingActivity" style="display:none">
-    <table style="width:100%;font-size:12px;border-collapse:collapse">
+  <div id="breakingActivity" style="${ACTIVITY_CONTAINER_STYLE}">
+    ${showCountText}
+    <table style="${ACTIVITY_TABLE_STYLE}">
       <thead>
         <tr style="background:#f2f2f2">
           <th style="text-align:left;padding:2px 6px">Date</th>
-          <th style="text-align:left;padding:2px 6px">From → To</th>
+          <th style="text-align:center;padding:2px 6px">From</th>
+          <th style="text-align:center;padding:2px 6px">→</th>
+          <th style="text-align:left;padding:2px 6px">To</th>
           <th style="text-align:right;padding:2px 6px">Net Tons</th>
           <th style="text-align:left;padding:2px 6px">Material</th>
         </tr>
@@ -734,7 +956,6 @@ const activity = `
       <tbody>${rowsHtml}</tbody>
     </table>
   </div>
-
   <div style="margin-top:6px; display:flex; gap:6px; align-items:center">
     <button type="button" id="breakingToggle"
       style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f8f8f8;cursor:pointer">
@@ -786,7 +1007,7 @@ const activity = `
     ${activity}
     ${unprepSection}
   `;
-  return `<div style="min-width:300px">${body}</div>`;
+  return `<div style="${POPUP_CONTAINER_STYLE}">${body}</div>`;
 }
 
 function renderBurningPopup(payload, markers, stockIndex) {
@@ -809,44 +1030,55 @@ function renderBurningPopup(payload, markers, stockIndex) {
   // Summary section
 
 const summary = `
-  <div style="margin-bottom:8px">
-    <table style="width:100%;font-size:12px;line-height:1.3;border-collapse:collapse">
+  <div style="margin-bottom:8px;text-align:center">
+    <table style="width:auto;font-size:12px;line-height:1.3;border-collapse:collapse;margin:0 auto; text-align:left">
       <tr>
         <td style="color:#666;padding:2px 6px">Total Coil Inventory</td>
-        <td style="text-align:right;padding:2px 6px"><b>${coilsInvText}</b> <span style="color:#555"><b>(${coilsInvTonsText} tons)</b></span></td>
+        <td style="text-align:left;padding:2px 6px"><b>${coilsInvText}</b> <span style="color:#555"><b>(${coilsInvTonsText} tons)</b></span></td>
       </tr>
       <tr>
         <td style="color:#666;padding:2px 6px">Net Tons Cut</td>
-        <td style="text-align:right;padding:2px 6px"><b>${fmtTons(t.netTons)}</b></td>
+        <td style="text-align:left;padding:2px 6px"><b>${fmtTons(t.netTons)}</b></td>
       </tr>
       <tr>
         <td style="color:#666;padding:2px 6px">Billable Tons Cut</td>
-        <td style="text-align:right;padding:2px 6px"><b>${fmtTons(t.billableTons)}</b></td>
+        <td style="text-align:left;padding:2px 6px"><b>${fmtTons(t.billableTons)}</b></td>
       </tr>
     </table>
   </div>
 `;
 
-  // ALL activity rows
-  const rowsHtml = payload.rows.map(r => `
+  // Activity rows - ALL for current month
+  const rowsHtml = (payload.rows || []).map(r => `
     &lt;tr&gt;
       &lt;td style="padding:2px 6px;white-space:nowrap"&gt;${esc(r.dateLabel)}&lt;/td&gt;
-      &lt;td style="padding:2px 6px"&gt;${esc(r.from)} → ${esc(r.to)}&lt;/td&gt;
+      &lt;td style="padding:2px 6px;text-align:center;white-space:nowrap"&gt;${esc(r.from)}&lt;/td&gt;
+      &lt;td style="padding:2px 6px;text-align:center;white-space:nowrap"&gt;→&lt;/td&gt;
+      &lt;td style="padding:2px 6px;white-space:nowrap"&gt;${esc(r.to)}&lt;/td&gt;
       &lt;td style="padding:2px 6px;text-align:right"&gt;${fmtTons(r.netTons)}&lt;/td&gt;
       &lt;td style="padding:2px 6px;text-align:right"&gt;${fmtInt(r.cuts)}&lt;/td&gt;
       &lt;td style="padding:2px 6px;text-align:right"&gt;${fmtTons(r.billableTons)}&lt;/td&gt;
     &lt;/tr&gt;
   `).join('');
 
+  const totalTransfers = (payload.rows || []).length;
+  const activityCountHint = `<div style="font-size:11px;color:#999;margin:4px 0;">${totalTransfers} transfers this month</div>`;
+  
+  // Store totals globally for CSV export
+  window.currentBurningTotals = payload.totals || {};
+
   // Activity section
   const activity = `
-  &lt;div id="burningActivity" style="display:none"&gt;
-      &lt;table style="width:100%;font-size:12px;border-collapse:collapse"&gt;
+  &lt;div id="burningActivity" style="${ACTIVITY_CONTAINER_STYLE}"&gt;
+      ${activityCountHint}
+      &lt;table style="${ACTIVITY_TABLE_STYLE}"&gt;
         &lt;thead&gt;
           &lt;tr style="background:#f2f2f2"&gt;
             &lt;th style="text-align:left;padding:2px 6px"&gt;Date&lt;/th&gt;
-            &lt;th style="text-align:left;padding:2px 6px"&gt;From → To&lt;/th&gt;
-            &lt;th style="text-align:right;padding:2px 6px"&gt;NetTons&lt;/th&gt;
+            &lt;th style="text-align:left;padding:2px 6px"&gt;From&lt;/th&gt;
+            &lt;th style="text-align:center;padding:2px 6px"&gt;→&lt;/th&gt;
+            &lt;th style="text-align:left;padding:2px 6px"&gt;To&lt;/th&gt;
+            &lt;th style="text-align:right;padding:2px 6px"&gt;Net Tons&lt;/th&gt;
             &lt;th style="text-align:right;padding:2px 6px"&gt;Cuts&lt;/th&gt;
             &lt;th style="text-align:right;padding:2px 6px"&gt;Billable&lt;/th&gt;
           &lt;/tr&gt;
@@ -904,7 +1136,7 @@ const summary = `
     ${coilsSection}
   `;
 
-  return `&lt;div style="min-width:300px"&gt;${body}&lt;/div&gt;`;
+  return `&lt;div style="${POPUP_CONTAINER_STYLE}"&gt;${body}&lt;/div&gt;`;
 }
 
 // 5) Wire popup events ------------------------------------------------
@@ -981,17 +1213,30 @@ function wireBreakingPopupEvents(container, marker) {
     if (dlBtn) dlBtn.style.display = 'none';
   }
 
-  // NEW: Download handler for Breaking (mirrors Burning)
+  // NEW: Download handler for Breaking (current month only)
   if (dlBtn) {
     dlBtn.addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();
-      const a = document.createElement('a');
-      a.href = breakingCsvUrl;       // <-- uses the existing constant
-      a.target = '_blank';
-      a.rel = 'noopener';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      const rows = window.currentBreakingSheetRows || [];
+      const totals = window.currentBreakingTotals || {};
+      const exportRows = rows.map(r => ({
+        Date: r.dateLabel || '',
+        Commodity: r.material || '',
+        Net: r.netLbs ?? '',
+        'Net Tons': r.netTons ?? '',
+        'From Pile #': r.from || '',
+        'To Pile #': r.to || ''
+      }));
+      // Append totals row
+      exportRows.push({
+        Date: 'TOTAL',
+        Commodity: '',
+        Net: totals.totalLbs ?? '',
+        'Net Tons': totals.totalTons ?? '',
+        'From Pile #': '',
+        'To Pile #': ''
+      });
+      downloadCsvFromRows('Breaking.csv', exportRows, ['Date', 'Commodity', 'Net', 'Net Tons', 'From Pile #', 'To Pile #']);
     });
   }
 
@@ -1118,13 +1363,28 @@ function wireBurningPopupEvents(container, marker) {
   if (dlBtn) {
     dlBtn.addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();
-      const a = document.createElement('a');
-      a.href = burningCsvUrl;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      const rows = window.currentBurningSheetRows || [];
+      const totals = window.currentBurningTotals || {};
+      const exportRows = rows.map(r => ({
+        Date: r.dateLabel || '',
+        'Net(lbs)': r.netLbs ?? '',
+        From: r.from || '',
+        To: r.to || '',
+        NetTons: r.netTons ?? '',
+        '# of Cuts': r.cuts ?? '',
+        'Billable Tons': r.billableTons ?? ''
+      }));
+      // Append totals row
+      exportRows.push({
+        Date: 'TOTAL',
+        'Net(lbs)': totals.netLbs ?? '',
+        From: '',
+        To: '',
+        NetTons: totals.netTons ?? '',
+        '# of Cuts': totals.cuts ?? '',
+        'Billable Tons': totals.billableTons ?? ''
+      });
+      downloadCsvFromRows('Burning.csv', exportRows, ['Date', 'Net(lbs)', 'From', 'To', 'NetTons', '# of Cuts', 'Billable Tons']);
     });
   }
 }
@@ -1142,7 +1402,7 @@ window.burningArea = burningArea;
 burningArea.bindPopup('', { maxWidth: 420, autopan: false });
 
 burningArea.on('popupopen', async () => {
-  burningArea.setPopupContent('&lt;div style="min-width:300px"&gt;Loading…&lt;/div&gt;');
+  burningArea.setPopupContent(`&lt;div style="${POPUP_CONTAINER_STYLE}"&gt;Loading…&lt;/div&gt;`);
   try {
     const payload = await fetchBurningTotals();
     const encoded = renderBurningPopup(payload, allMarkersData, stockIndexGlobal);
@@ -1156,7 +1416,7 @@ burningArea.on('popupopen', async () => {
 
   } catch (err) {
     console.error(err);
-    burningArea.setPopupContent('&lt;b&gt;Burning Station&lt;/b&gt;&lt;div style="color:#c00"&gt;Failed to load BurningTotals.csv.&lt;/div&gt;');
+    burningArea.setPopupContent('&lt;b&gt;Burning Station&lt;/b&gt;&lt;div style="color:#c00"&gt;Failed to load Production.xlsx Burning sheet.&lt;/div&gt;');
   }
 });
 
@@ -1172,7 +1432,7 @@ window.breakingArea = breakingArea;
 breakingArea.bindPopup('', { maxWidth: 420, autopan: false });
 
 breakingArea.on('popupopen', async () => {
-  breakingArea.setPopupContent('<div style="min-width:300px">Loading…</div>');
+  breakingArea.setPopupContent(`<div style="${POPUP_CONTAINER_STYLE}">Loading…</div>`);
   try {
     const payload = await fetchBreakingTotals();
     const encoded = renderBreakingPopup(payload, allMarkersData, stockIndexGlobal);
@@ -1185,7 +1445,7 @@ breakingArea.on('popupopen', async () => {
     }, 0);
   } catch (err) {
     console.error(err);
-    breakingArea.setPopupContent('<b>Breaking Pit</b><div style="color:#c00">Failed to load BreakingTotals.csv.</div>');
+    breakingArea.setPopupContent('<b>Breaking Pit</b><div style="color:#c00">Failed to load Production.xlsx Breaking sheet.</div>');
   }
 });
 /* ===================================================================
@@ -1362,6 +1622,16 @@ function isPastDueExempt(marker, stockIndex) {
 =================================================================== */
 
   function createSearchModal() {
+    if (isSearchModalOpen) {
+      return null;
+    }
+    isSearchModalOpen = true;
+
+    const searchButton = document.getElementById('searchPanelToggle');
+    if (searchButton) {
+      searchButton.style.display = 'none';
+    }
+
     // Backdrop for closing modal on click outside
     const backdrop = document.createElement('div');
     backdrop.id = 'searchModalBackdrop';
@@ -1688,6 +1958,11 @@ function isPastDueExempt(marker, stockIndex) {
       modal.remove();
       backdrop.remove();
       map.keyboard.enable();
+      isSearchModalOpen = false;
+      const searchButton = document.getElementById('searchPanelToggle');
+      if (searchButton) {
+        searchButton.style.display = '';
+      }
     }
 
     closeBtn.onclick = closeSearchModal;
@@ -1735,6 +2010,9 @@ function isPastDueExempt(marker, stockIndex) {
     };
 
     btn.onclick = () => {
+      if (isSearchModalOpen) {
+        return;
+      }
       map.keyboard.disable();
       createSearchModal();
     };
