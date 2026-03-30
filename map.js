@@ -284,11 +284,13 @@ Object.keys(loadCellMarkers).forEach(id => {
 const totalsXlsxUrl = 'Production.xlsx';
 const burningLatLng = [40.79365495632949, -82.53501357377355];
 const breakingLatLng = [40.79408763021845, -82.5388475264302];
+const bucketLoadingLatLng = [40.79393364810161, -82.53693358538756];
 
 // 2) Cache + helpers --------------------------------------------------
 let totalsWorkbookCache = { at: 0, workbook: null };
 let burningCache = { at: 0, data: null };
 let breakingCache = { at: 0, data: null };
+let bucketLoadingCache = { at: 0, data: null };
 let latestInventoryPeriod = { year: null, month: null };
 
 function fmtInt(n)  { return (typeof n === 'number' && isFinite(n)) ? Math.round(n).toLocaleString('en-US') : '—'; }
@@ -1141,6 +1143,229 @@ const summary = `
 
 // 5) Wire popup events ------------------------------------------------
 
+async function fetchBucketLoadingConsumption(force = false) {
+  const now = Date.now();
+  if (!force && bucketLoadingCache.data && (now - bucketLoadingCache.at) < 120000) {
+    return bucketLoadingCache.data;
+  }
+
+  const toNum = v => {
+    const n = Number(v || 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const workbook = await loadTotalsWorkbook(force);
+  const sheet = findSheetByName(workbook, 'Consumption');
+  if (!sheet) {
+    console.warn('Consumption sheet not found');
+    return null;
+  }
+
+  const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+  if (!Array.isArray(data) || data.length < 2) {
+    console.warn('Consumption sheet has insufficient data');
+    return null;
+  }
+
+  const { year: filterYear, month: filterMonth } = getCurrentInventoryPeriod();
+
+  const maxCols = data.reduce((m, row) => Math.max(m, Array.isArray(row) ? row.length : 0), 0);
+  const candidateStarts = [];
+  for (let c = 0; c <= maxCols - 3; c += 3) {
+    candidateStarts.push(c);
+  }
+
+  let chosenStart = null;
+  let bestMatchCount = -1;
+
+  const monthMatches = (date) => {
+    return date instanceof Date && !Number.isNaN(date.getTime()) && date.getFullYear() === filterYear && date.getMonth() === filterMonth;
+  };
+
+  for (const start of candidateStarts) {
+    let matchCount = 0;
+    let sampleCount = 0;
+
+    for (let r = 1; r < data.length; r++) {
+      const rowData = data[r];
+      if (!Array.isArray(rowData)) continue;
+      const dateVal = rowData[start];
+      if (dateVal == null || String(dateVal).trim() === '') continue;
+
+      sampleCount += 1;
+      const parsed = parseXlsxDateCell(dateVal);
+      if (monthMatches(parsed)) {
+        matchCount += 1;
+      }
+    }
+
+    if (matchCount > bestMatchCount || (matchCount === bestMatchCount && sampleCount > 0 && chosenStart === null)) {
+      bestMatchCount = matchCount;
+      chosenStart = start;
+    }
+  }
+
+  if (chosenStart === null) {
+    chosenStart = ((filterMonth + 1) * 3);
+    if (chosenStart >= maxCols) chosenStart = 0;
+  }
+
+  const rows = [];
+  let totalPounds = 0;
+  let totalTons = 0;
+  let avgPounds = 0;
+  let avgTons = 0;
+  let totalRowCount = 0;
+
+  for (let r = 1; r < data.length; r++) {
+    const rowData = data[r];
+    if (!Array.isArray(rowData)) continue;
+
+    const dateCell = rowData[chosenStart];
+    const poundsCell = rowData[chosenStart + 1];
+    const tonsCell = rowData[chosenStart + 2];
+
+    if ((dateCell == null || String(dateCell).trim() === '') && (poundsCell == null || String(poundsCell).trim() === '') && (tonsCell == null || String(tonsCell).trim() === '')) {
+      continue;
+    }
+
+    const dateText = String(dateCell || '').trim();
+    const lbs = toNum(poundsCell);
+    const tons = toNum(tonsCell);
+    const lowerDateText = dateText.toLowerCase();
+
+    if (lowerDateText.includes('total') || lowerDateText.includes('sum') || lowerDateText.includes('average') || lowerDateText.includes('avg')) {
+      if ((lowerDateText.includes('total') || lowerDateText.includes('sum')) && lbs > 0) {
+        totalPounds = lbs;
+        totalTons = tons;
+      }
+      if ((lowerDateText.includes('average') || lowerDateText.includes('avg')) && lbs > 0) {
+        avgPounds = lbs;
+        avgTons = tons;
+      }
+      continue;
+    }
+
+    let dayNum = null;
+    let dateLabel = '';
+
+    const parsed = parseXlsxDateCell(dateCell);
+    if (monthMatches(parsed)) {
+      dayNum = parsed.getDate();
+      dateLabel = `${parsed.getMonth() + 1}/${parsed.getDate()}`;
+    } else {
+      const maybeDay = Number(dateText);
+      if (Number.isFinite(maybeDay) && maybeDay >= 1 && maybeDay <= 31) {
+        dayNum = maybeDay;
+        dateLabel = `Day ${maybeDay}`;
+      } else {
+        continue;
+      }
+    }
+
+    rows.push({ day: dayNum, dateLabel, pounds: lbs, tons });
+    totalRowCount += 1;
+  }
+
+  if (totalPounds === 0 && totalRowCount > 0) {
+    totalPounds = rows.reduce((sum, row) => sum + (row.pounds || 0), 0);
+    totalTons = rows.reduce((sum, row) => sum + (row.tons || 0), 0);
+  }
+  if (avgPounds === 0 && totalRowCount > 0) {
+    avgPounds = totalPounds / totalRowCount;
+    avgTons = totalTons / totalRowCount;
+  }
+
+  const payload = {
+    rows,
+    month: {
+      year: filterYear,
+      monthIndex: filterMonth,
+      rowCount: totalRowCount,
+      blockStart: chosenStart
+    },
+    totals: {
+      totalPounds,
+      totalTons,
+      avgPounds,
+      avgTons
+    }
+  };
+
+  window.currentBucketLoadingRows = rows;
+  bucketLoadingCache = { at: now, data: payload };
+  return payload;
+}
+
+function renderBucketLoadingPopup(payload) {
+  if (!payload) {
+    return '<b>Bucket Loading</b><div>No data.</div>';
+  }
+
+  const t = payload.totals || {};
+  const totalPoundsText = (typeof t.totalPounds === 'number' && isFinite(t.totalPounds)) ? fmtInt(t.totalPounds) : '—';
+  const totalTonsText = (typeof t.totalTons === 'number' && isFinite(t.totalTons)) ? fmtTons2(t.totalTons, 2) : '—';
+  const avgPoundsText = (typeof t.avgPounds === 'number' && isFinite(t.avgPounds)) ? fmtInt(t.avgPounds) : '—';
+  const avgTonsText = (typeof t.avgTons === 'number' && isFinite(t.avgTons)) ? fmtTons2(t.avgTons, 2) : '—';
+
+  const rowsHtml = (payload.rows || []).map(r => `
+    <tr>
+      <td style="padding:2px 6px;white-space:nowrap">${esc(r.dateLabel)}</td>
+      <td style="padding:2px 6px;text-align:right">${fmtInt(r.pounds)}</td>
+      <td style="padding:2px 6px;text-align:right">${fmtTons2(r.tons, 2)}</td>
+    </tr>
+  `).join('');
+
+  const rowCount = (payload.rows || []).length;
+  const countText = rowCount > 0 ? `<div style="font-size:11px;color:#999;margin:4px 0;">${rowCount} rows this month</div>` : '';
+
+  const body = `
+  <div style="font-weight:700;margin-bottom:6px">Bucket Loading</div>
+  <div style="margin-bottom:8px;text-align:center">
+    <table style="width:auto;font-size:12px;line-height:1.3;border-collapse:collapse;margin:0 auto;text-align:left">
+      <tr><td style="color:#666;padding:2px 6px">Total Consumed</td><td style="text-align:right;padding:2px 6px"><b>${totalPoundsText} lbs</b> <span style="color:#555">(<b>${totalTonsText} tons</b>)</span></td></tr>
+      <tr><td style="color:#666;padding:2px 6px">Daily Average</td><td style="text-align:right;padding:2px 6px"><b>${avgPoundsText} lbs</b> <span style="color:#555">(<b>${avgTonsText} tons</b>)</span></td></tr>
+    </table>
+  </div>
+  <div id="bucketLoadingActivity" style="${ACTIVITY_CONTAINER_STYLE}">
+    ${countText}
+    <table style="${ACTIVITY_TABLE_STYLE}">
+      <thead>
+        <tr style="background:#f2f2f2">
+          <th style="text-align:left;padding:2px 6px">Date</th>
+          <th style="text-align:right;padding:2px 6px">Pounds</th>
+          <th style="text-align:right;padding:2px 6px">Tons</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  </div>
+  <div style="margin-top:6px;display:flex;gap:6px;align-items:center">
+    <button type="button" id="bucketLoadingToggle" style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f8f8f8;cursor:pointer">Show Activity</button>
+  </div>
+`;
+
+  return `<div style="${POPUP_CONTAINER_STYLE}">${body}</div>`;
+}
+
+function wireBucketLoadingPopupEvents(container, marker) {
+  const toggle = container.querySelector('#bucketLoadingToggle');
+  const block = container.querySelector('#bucketLoadingActivity');
+
+  if (block) block.style.display = 'none';
+
+  if (toggle && block) {
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const isHidden = block.style.display === 'none';
+      block.style.display = isHidden ? '' : 'none';
+      toggle.textContent = isHidden ? 'Hide Activity' : 'Show Activity';
+    });
+    block.addEventListener('click', e => e.stopPropagation());
+  }
+}
+
 function wireBreakingPopupEvents(container, marker) {
   // Activity
   const activityToggle = container.querySelector('#breakingToggle');
@@ -1446,6 +1671,35 @@ breakingArea.on('popupopen', async () => {
   } catch (err) {
     console.error(err);
     breakingArea.setPopupContent('<b>Breaking Pit</b><div style="color:#c00">Failed to load Production.xlsx Breaking sheet.</div>');
+  }
+});
+
+const bucketLoadingArea = L.circleMarker(bucketLoadingLatLng, {
+  radius: 18,
+  color: 'rgba(255,255,0,0.01)',
+  fillColor: 'rgba(0,0,0,0.01)',
+  fillOpacity: 0.01,
+  weight: 12
+}).addTo(map);
+window.bucketLoadingArea = bucketLoadingArea;
+
+bucketLoadingArea.bindPopup('', { maxWidth: 420, autopan: false });
+
+bucketLoadingArea.on('popupopen', async () => {
+  bucketLoadingArea.setPopupContent(`<div style="${POPUP_CONTAINER_STYLE}">Loading…</div>`);
+  try {
+    const payload = await fetchBucketLoadingConsumption();
+    const encoded = renderBucketLoadingPopup(payload);
+    const decoded = unescapeAngles(encoded);
+    bucketLoadingArea.setPopupContent(decoded);
+
+    setTimeout(() => {
+      const el = bucketLoadingArea.getPopup()?.getElement();
+      if (el) wireBucketLoadingPopupEvents(el, bucketLoadingArea);
+    }, 0);
+  } catch (err) {
+    console.error(err);
+    bucketLoadingArea.setPopupContent('<b>Bucket Loading</b><div style="color:#c00">Failed to load Consumption sheet.</div>');
   }
 });
 /* ===================================================================
