@@ -345,6 +345,18 @@ function parseXlsxDateCell(value) {
   if (value instanceof Date && isFinite(value.getTime())) return value;
   const v = String(value || '').trim();
   if (!v) return null;
+
+  // Parse YYYY-MM-DD as a local date (avoid UTC shift from new Date('YYYY-MM-DD')).
+  const isoDateOnly = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoDateOnly) {
+    const year = Number(isoDateOnly[1]);
+    const month = Number(isoDateOnly[2]) - 1;
+    const day = Number(isoDateOnly[3]);
+    if (!Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
+      return new Date(year, month, day);
+    }
+  }
+
   // Prefer inventory parser first
   const parsed = parseInventoryReportDate(v);
   if (parsed) return parsed;
@@ -1150,67 +1162,164 @@ async function fetchBucketLoadingConsumption(force = false) {
   }
 
   const toNum = v => {
-    const n = Number(v || 0);
+    if (v == null) return 0;
+    if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+
+    const raw = String(v).trim();
+    if (!raw) return 0;
+
+    // Handle common Excel/export formats like "1,234", "(1,234)", or "1,234 lbs".
+    const cleaned = raw
+      .replace(/,/g, '')
+      .replace(/\(([^)]+)\)/, '-$1')
+      .replace(/[^0-9.+-]/g, '');
+
+    if (!cleaned || cleaned === '-' || cleaned === '+') return 0;
+    const n = Number(cleaned);
     return Number.isFinite(n) ? n : 0;
   };
 
   const workbook = await loadTotalsWorkbook(force);
-  const sheet = findSheetByName(workbook, 'Consumption');
+  const sheet = findSheetByName(workbook, 'Consumption1');
   if (!sheet) {
-    console.warn('Consumption sheet not found');
+    console.warn('Consumption1 sheet not found');
     return null;
   }
 
   const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
   if (!Array.isArray(data) || data.length < 2) {
-    console.warn('Consumption sheet has insufficient data');
+    console.warn('Consumption1 sheet has insufficient data');
     return null;
   }
 
   const { year: filterYear, month: filterMonth } = getCurrentInventoryPeriod();
 
-  const maxCols = data.reduce((m, row) => Math.max(m, Array.isArray(row) ? row.length : 0), 0);
-  const candidateStarts = [];
-  for (let c = 0; c <= maxCols - 3; c += 3) {
-    candidateStarts.push(c);
-  }
-
-  let chosenStart = null;
-  let bestMatchCount = -1;
-
   const monthMatches = (date) => {
     return date instanceof Date && !Number.isNaN(date.getTime()) && date.getFullYear() === filterYear && date.getMonth() === filterMonth;
   };
 
-  for (const start of candidateStarts) {
-    let matchCount = 0;
-    let sampleCount = 0;
+  const toIsoFromDate = (dt) => dt instanceof Date && !Number.isNaN(dt.getTime())
+    ? `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+    : '';
 
-    for (let r = 1; r < data.length; r++) {
-      const rowData = data[r];
-      if (!Array.isArray(rowData)) continue;
-      const dateVal = rowData[start];
-      if (dateVal == null || String(dateVal).trim() === '') continue;
+  const headerRow = Array.isArray(data[0]) ? data[0] : [];
+  const headerNorm = headerRow.map(h => String(h || '').trim().toLowerCase());
+  const findCol = (...names) => {
+    for (const name of names) {
+      const idx = headerNorm.findIndex(h => h === String(name).toLowerCase());
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
 
-      sampleCount += 1;
-      const parsed = parseXlsxDateCell(dateVal);
-      if (monthMatches(parsed)) {
-        matchCount += 1;
+  const dateCol = findCol('date');
+  const poundsCol = findCol('total lbs', 'lbs', 'pounds');
+  const tonsCol = findCol('total tons', 'tons');
+  const bucketsCol = findCol('buckets loaded', 'buckets');
+  const heatsCol = findCol('heats completed', 'heats');
+
+  const resolvedDateCol = dateCol >= 0 ? dateCol : 0;
+  const resolvedPoundsCol = poundsCol >= 0 ? poundsCol : 1;
+  const resolvedTonsCol = tonsCol >= 0 ? tonsCol : 2;
+  const resolvedBucketsCol = bucketsCol >= 0 ? bucketsCol : 3;
+  const resolvedHeatsCol = heatsCol >= 0 ? heatsCol : 4;
+
+  const breakdownByIsoDate = {};
+
+  const consumption2 = findSheetByName(workbook, 'Consumption2');
+  if (consumption2) {
+    const data2 = window.XLSX.utils.sheet_to_json(consumption2, { header: 1, raw: false });
+    if (Array.isArray(data2) && data2.length >= 2) {
+      const header2 = Array.isArray(data2[0]) ? data2[0] : [];
+      const header2Norm = header2.map(h => String(h || '').trim().toLowerCase());
+      const findCol2 = (...names) => {
+        for (const name of names) {
+          const idx = header2Norm.findIndex(h => h === String(name).toLowerCase());
+          if (idx >= 0) return idx;
+        }
+        return -1;
+      };
+
+      const date2Col = (() => {
+        const i = findCol2('date', 'date material was used');
+        return i >= 0 ? i : 0;
+      })();
+      const pile2Col = (() => {
+        const i = findCol2('pile utilized', 'pile used', 'pile', 'pile #');
+        return i >= 0 ? i : 1;
+      })();
+      const lot2Col = (() => {
+        const i = findCol2('material lot# utilized', 'material lot # utilized', 'material lot # used', 'material lot #', 'lot #', 'lot');
+        return i >= 0 ? i : 2;
+      })();
+      const pounds2Col = (() => {
+        const i = findCol2('pounds utilized', 'total weight of material used in pounds', 'total weight of material used', 'weight (lbs)', 'pounds', 'lbs');
+        return i >= 0 ? i : 3;
+      })();
+      const tons2Col = (() => {
+        const i = findCol2('tons utilized', 'tons used', 'tons');
+        return i >= 0 ? i : 4;
+      })();
+
+      const pileBreakdownByDate = {};
+
+      for (let r2 = 1; r2 < data2.length; r2++) {
+        const row2 = data2[r2];
+        if (!Array.isArray(row2)) continue;
+        const dateCell2 = row2[date2Col];
+        const parsed2 = parseXlsxDateCell(dateCell2);
+
+        let iso2 = '';
+        if (parsed2) {
+          iso2 = toIsoFromDate(parsed2);
+        } else {
+          const maybeDay2 = Number(String(dateCell2 || '').trim());
+          if (Number.isFinite(maybeDay2) && maybeDay2 >= 1 && maybeDay2 <= 31) {
+            iso2 = `${filterYear}-${String(filterMonth + 1).padStart(2, '0')}-${String(maybeDay2).padStart(2, '0')}`;
+          }
+        }
+
+        if (!iso2) continue;
+
+        const pile = String(row2[pile2Col] || '').trim();
+        const lot = String(row2[lot2Col] || '').trim();
+        const pounds = toNum(row2[pounds2Col]);
+        const tonsCellRaw = row2[tons2Col];
+        const tonsCellText = String(tonsCellRaw ?? '').trim();
+        const rawTons = toNum(tonsCellRaw);
+        const tons = tonsCellText === '' ? (pounds / 2000) : rawTons;
+
+        if (!pile || !Number.isFinite(pounds) || pounds === 0) continue;
+
+        if (!pileBreakdownByDate[iso2]) {
+          pileBreakdownByDate[iso2] = {};
+        }
+
+        if (!pileBreakdownByDate[iso2][pile]) {
+          pileBreakdownByDate[iso2][pile] = { pile, pounds: 0, tons: 0, lots: new Set() };
+        }
+
+        pileBreakdownByDate[iso2][pile].pounds += pounds;
+        pileBreakdownByDate[iso2][pile].tons += tons;
+        if (lot) pileBreakdownByDate[iso2][pile].lots.add(lot);
       }
-    }
 
-    if (matchCount > bestMatchCount || (matchCount === bestMatchCount && sampleCount > 0 && chosenStart === null)) {
-      bestMatchCount = matchCount;
-      chosenStart = start;
+      Object.keys(pileBreakdownByDate).forEach(iso => {
+        const pileMap = pileBreakdownByDate[iso];
+        breakdownByIsoDate[iso] = Object.values(pileMap)
+          .map(item => ({
+            pile: item.pile,
+            pounds: item.pounds,
+            tons: item.tons,
+            lotCount: item.lots.size
+          }))
+          .sort((a, b) => b.pounds - a.pounds || a.pile.localeCompare(b.pile));
+      });
     }
-  }
-
-  if (chosenStart === null) {
-    chosenStart = ((filterMonth + 1) * 3);
-    if (chosenStart >= maxCols) chosenStart = 0;
   }
 
   const rows = [];
+  const allRows = [];
   let totalPounds = 0;
   let totalTons = 0;
   let avgPounds = 0;
@@ -1221,17 +1330,21 @@ async function fetchBucketLoadingConsumption(force = false) {
     const rowData = data[r];
     if (!Array.isArray(rowData)) continue;
 
-    const dateCell = rowData[chosenStart];
-    const poundsCell = rowData[chosenStart + 1];
-    const tonsCell = rowData[chosenStart + 2];
+    const dateCell = rowData[resolvedDateCol];
+    const poundsCell = rowData[resolvedPoundsCol];
+    const tonsCell = rowData[resolvedTonsCol];
+    const bucketsCell = rowData[resolvedBucketsCol];
+    const heatsCell = rowData[resolvedHeatsCol];
 
-    if ((dateCell == null || String(dateCell).trim() === '') && (poundsCell == null || String(poundsCell).trim() === '') && (tonsCell == null || String(tonsCell).trim() === '')) {
+    if ((dateCell == null || String(dateCell).trim() === '') && (poundsCell == null || String(poundsCell).trim() === '') && (tonsCell == null || String(tonsCell).trim() === '') && (bucketsCell == null || String(bucketsCell).trim() === '') && (heatsCell == null || String(heatsCell).trim() === '')) {
       continue;
     }
 
     const dateText = String(dateCell || '').trim();
     const lbs = toNum(poundsCell);
     const tons = toNum(tonsCell);
+    const bucketsLoaded = toNum(bucketsCell);
+    const heatsCompleted = toNum(heatsCell);
     const lowerDateText = dateText.toLowerCase();
 
     if (lowerDateText.includes('total') || lowerDateText.includes('sum') || lowerDateText.includes('average') || lowerDateText.includes('avg')) {
@@ -1248,23 +1361,45 @@ async function fetchBucketLoadingConsumption(force = false) {
 
     let dayNum = null;
     let dateLabel = '';
+    let isoDate = '';
 
     const parsed = parseXlsxDateCell(dateCell);
     if (monthMatches(parsed)) {
       dayNum = parsed.getDate();
       dateLabel = `${parsed.getMonth() + 1}/${parsed.getDate()}`;
+      isoDate = toIsoFromDate(parsed);
     } else {
       const maybeDay = Number(dateText);
       if (Number.isFinite(maybeDay) && maybeDay >= 1 && maybeDay <= 31) {
         dayNum = maybeDay;
         dateLabel = `Day ${maybeDay}`;
+        isoDate = `${filterYear}-${String(filterMonth + 1).padStart(2, '0')}-${String(maybeDay).padStart(2, '0')}`;
       } else {
         continue;
       }
     }
 
-    rows.push({ day: dayNum, dateLabel, pounds: lbs, tons });
+    const rowObj = {
+      day: dayNum,
+      dateLabel,
+      isoDate,
+      pounds: lbs,
+      tons,
+      bucketsLoaded,
+      heatsCompleted,
+      breakdown: breakdownByIsoDate[isoDate] || []
+    };
+
+    allRows.push(rowObj);
+    if (monthMatches(parsed) || !parsed) {
+      rows.push(rowObj);
+    }
     totalRowCount += 1;
+  }
+
+  // If no rows matched the current month filter, fall back to all valid rows.
+  if (rows.length === 0 && allRows.length > 0) {
+    rows.push(...allRows);
   }
 
   if (totalPounds === 0 && totalRowCount > 0) {
@@ -1282,7 +1417,7 @@ async function fetchBucketLoadingConsumption(force = false) {
       year: filterYear,
       monthIndex: filterMonth,
       rowCount: totalRowCount,
-      blockStart: chosenStart
+      breakdownRowCount: Object.keys(breakdownByIsoDate).length
     },
     totals: {
       totalPounds,
@@ -1309,10 +1444,15 @@ function renderBucketLoadingPopup(payload) {
   const avgTonsText = (typeof t.avgTons === 'number' && isFinite(t.avgTons)) ? fmtTons2(t.avgTons, 2) : '—';
 
   const rowsHtml = (payload.rows || []).map(r => `
-    <tr>
-      <td style="padding:2px 6px;white-space:nowrap">${esc(r.dateLabel)}</td>
+    <tr class="bucket-loading-main-row" data-date="${esc(r.isoDate)}">
+      <td style="padding:2px 6px;white-space:nowrap"><button type="button" class="bucket-loading-date-link" data-date="${esc(r.isoDate)}" style="border:none;background:none;color:#0b57d0;text-decoration:underline;padding:0;cursor:pointer;font:inherit">${esc(r.dateLabel)}</button></td>
       <td style="padding:2px 6px;text-align:right">${fmtInt(r.pounds)}</td>
       <td style="padding:2px 6px;text-align:right">${fmtTons2(r.tons, 2)}</td>
+      <td style="padding:2px 6px;text-align:right">${fmtInt(r.bucketsLoaded)}</td>
+      <td style="padding:2px 6px;text-align:right">${fmtInt(r.heatsCompleted)}</td>
+    </tr>
+    <tr class="bucket-loading-detail-row" data-date="${esc(r.isoDate)}" style="display:none;background:#fafafa">
+      <td colspan="5" style="padding:6px 10px"></td>
     </tr>
   `).join('');
 
@@ -1335,6 +1475,8 @@ function renderBucketLoadingPopup(payload) {
           <th style="text-align:left;padding:2px 6px">Date</th>
           <th style="text-align:right;padding:2px 6px">Pounds</th>
           <th style="text-align:right;padding:2px 6px">Tons</th>
+          <th style="text-align:right;padding:2px 6px">Buckets</th>
+          <th style="text-align:right;padding:2px 6px">Heats</th>
         </tr>
       </thead>
       <tbody>${rowsHtml}</tbody>
@@ -1363,6 +1505,76 @@ function wireBucketLoadingPopupEvents(container, marker) {
       toggle.textContent = isHidden ? 'Hide Activity' : 'Show Activity';
     });
     block.addEventListener('click', e => e.stopPropagation());
+  }
+
+  const dateLinks = container.querySelectorAll('.bucket-loading-date-link');
+  if (dateLinks && dateLinks.length > 0) {
+    dateLinks.forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const dateKey = String(link.getAttribute('data-date') || '').trim();
+        if (!dateKey) return;
+
+        const rows = Array.isArray(window.currentBucketLoadingRows) ? window.currentBucketLoadingRows : [];
+        const dayRow = rows.find(r => String(r.isoDate || '') === dateKey);
+        if (!dayRow) return;
+
+        const allDetailRows = container.querySelectorAll('.bucket-loading-detail-row');
+        allDetailRows.forEach(dr => {
+          if (dr.getAttribute('data-date') !== dateKey) {
+            dr.style.display = 'none';
+          }
+        });
+
+        const detailRows = container.querySelectorAll('.bucket-loading-detail-row');
+        const detailRow = Array.from(detailRows).find(dr => dr.getAttribute('data-date') === dateKey);
+        if (!detailRow) return;
+
+        const currentlyVisible = detailRow.style.display !== 'none';
+        detailRow.style.display = currentlyVisible ? 'none' : '';
+        if (currentlyVisible) return;
+
+        const detailCell = detailRow.querySelector('td');
+        if (!detailCell) return;
+
+        const breakdownRows = Array.isArray(dayRow.breakdown) ? dayRow.breakdown : [];
+        const breakdownTotal = breakdownRows.reduce((sum, item) => sum + (Number(item.pounds) || 0), 0);
+        const breakdownTotalTons = breakdownRows.reduce((sum, item) => sum + (Number(item.tons) || 0), 0);
+        const breakdownHtml = breakdownRows.length > 0
+          ? breakdownRows.map(item => `
+              <tr>
+                <td style="padding:4px 8px;border-bottom:1px solid #eee;white-space:nowrap">${esc(item.pile || '')}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${fmtInt(item.pounds)}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${fmtTons2(item.tons, 2)}</td>
+              </tr>
+            `).join('')
+          : '<tr><td colspan="3" style="padding:8px;color:#666">No pile breakdown data for this day.</td></tr>';
+
+        const totalsHtml = `
+          <tr style="background:#f8f8f8">
+            <td style="padding:5px 8px;border-top:1px solid #ddd"><b>Daily Total</b></td>
+            <td style="padding:5px 8px;border-top:1px solid #ddd;text-align:right"><b>${fmtInt(breakdownTotal)}</b></td>
+            <td style="padding:5px 8px;border-top:1px solid #ddd;text-align:right"><b>${fmtTons2(breakdownTotalTons, 2)}</b></td>
+          </tr>
+        `;
+
+        detailCell.innerHTML = `
+          <div style="font-size:12px;color:#444;margin-bottom:4px"><b>${esc(dayRow.dateLabel)}</b> pile usage breakdown</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff">
+            <thead>
+              <tr style="background:#f4f6f8">
+                <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #ddd">Pile Utilized</th>
+                <th style="padding:4px 8px;text-align:right;border-bottom:1px solid #ddd">Pounds</th>
+                <th style="padding:4px 8px;text-align:right;border-bottom:1px solid #ddd">Tons</th>
+              </tr>
+            </thead>
+            <tbody>${breakdownHtml}${totalsHtml}</tbody>
+          </table>
+        `;
+      });
+    });
   }
 }
 
@@ -1699,7 +1911,7 @@ bucketLoadingArea.on('popupopen', async () => {
     }, 0);
   } catch (err) {
     console.error(err);
-    bucketLoadingArea.setPopupContent('<b>Bucket Loading</b><div style="color:#c00">Failed to load Consumption sheet.</div>');
+    bucketLoadingArea.setPopupContent('<b>Bucket Loading</b><div style="color:#c00">Failed to load Consumption1 sheet.</div>');
   }
 });
 /* ===================================================================
