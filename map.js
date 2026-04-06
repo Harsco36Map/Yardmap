@@ -442,6 +442,16 @@ function extractPileCode(name) {
   return m ? m[0] : null;
 }
 
+// Normalize pile codes so numeric codes match regardless of leading zeros (e.g., 092 === 92).
+function normalizePileCode(code) {
+  const raw = String(code ?? '').trim().toUpperCase();
+  if (!raw) return '';
+  if (/^\d+$/.test(raw)) {
+    return String(parseInt(raw, 10));
+  }
+  return raw;
+}
+
 // MM/DD/YYYY → Date
 function parseMDY(dateStr) {
   if (!dateStr) return null;
@@ -1226,6 +1236,25 @@ async function fetchBucketLoadingConsumption(force = false) {
 
   const breakdownByIsoDate = {};
 
+  const normalizeKey = (v) => String(v ?? '').trim().toUpperCase();
+  const getMaterialForLotOrPile = (lot, pile) => {
+    const lotKey = normalizeKey(lot);
+    const pileKey = normalizePileCode(pile);
+
+    if (lotKey) {
+      const byLot = Object.values(stockIndexGlobal || {}).find(item =>
+        normalizeKey(item && item.code) === lotKey
+      );
+      if (byLot && byLot.material) return String(byLot.material);
+    }
+
+    if (pileKey && stockIndexGlobal && stockIndexGlobal[pileKey] && stockIndexGlobal[pileKey].material) {
+      return String(stockIndexGlobal[pileKey].material);
+    }
+
+    return '';
+  };
+
   const consumption2 = findSheetByName(workbook, 'Consumption2');
   if (consumption2) {
     const data2 = window.XLSX.utils.sheet_to_json(consumption2, { header: 1, raw: false });
@@ -1281,7 +1310,7 @@ async function fetchBucketLoadingConsumption(force = false) {
 
         if (!iso2) continue;
 
-        const pile = String(row2[pile2Col] || '').trim();
+        const pile = normalizePileCode(row2[pile2Col]);
         const lot = String(row2[lot2Col] || '').trim();
         const pounds = toNum(row2[pounds2Col]);
         const tonsCellRaw = row2[tons2Col];
@@ -1296,12 +1325,15 @@ async function fetchBucketLoadingConsumption(force = false) {
         }
 
         if (!pileBreakdownByDate[iso2][pile]) {
-          pileBreakdownByDate[iso2][pile] = { pile, pounds: 0, tons: 0, lots: new Set() };
+          pileBreakdownByDate[iso2][pile] = { pile, pounds: 0, tons: 0, lots: new Map() };
         }
 
         pileBreakdownByDate[iso2][pile].pounds += pounds;
         pileBreakdownByDate[iso2][pile].tons += tons;
-        if (lot) pileBreakdownByDate[iso2][pile].lots.add(lot);
+        if (lot) {
+          const material = getMaterialForLotOrPile(lot, pile);
+          pileBreakdownByDate[iso2][pile].lots.set(lot, material);
+        }
       }
 
       Object.keys(pileBreakdownByDate).forEach(iso => {
@@ -1311,7 +1343,8 @@ async function fetchBucketLoadingConsumption(force = false) {
             pile: item.pile,
             pounds: item.pounds,
             tons: item.tons,
-            lotCount: item.lots.size
+            lotCount: item.lots.size,
+            lots: Array.from(item.lots.entries()).map(([lot, material]) => ({ lot, material }))
           }))
           .sort((a, b) => b.pounds - a.pounds || a.pile.localeCompare(b.pile));
       });
@@ -1456,9 +1489,6 @@ function renderBucketLoadingPopup(payload) {
     </tr>
   `).join('');
 
-  const rowCount = (payload.rows || []).length;
-  const countText = rowCount > 0 ? `<div style="font-size:11px;color:#999;margin:4px 0;">${rowCount} rows this month</div>` : '';
-
   const body = `
   <div style="font-weight:700;margin-bottom:6px">Bucket Loading</div>
   <div style="margin-bottom:8px;text-align:center">
@@ -1468,7 +1498,6 @@ function renderBucketLoadingPopup(payload) {
     </table>
   </div>
   <div id="bucketLoadingActivity" style="${ACTIVITY_CONTAINER_STYLE}">
-    ${countText}
     <table style="${ACTIVITY_TABLE_STYLE}">
       <thead>
         <tr style="background:#f2f2f2">
@@ -1544,17 +1573,30 @@ function wireBucketLoadingPopupEvents(container, marker) {
         const breakdownTotalTons = breakdownRows.reduce((sum, item) => sum + (Number(item.tons) || 0), 0);
         const breakdownHtml = breakdownRows.length > 0
           ? breakdownRows.map(item => `
+              ${(() => {
+                const lots = Array.isArray(item.lots) ? item.lots : [];
+                const lotsText = lots.length > 0
+                  ? lots.map(x => {
+                      const materialText = esc(x.material || '');
+                      return materialText || '—';
+                    }).join('<br>')
+                  : '—';
+                return `
               <tr>
                 <td style="padding:4px 8px;border-bottom:1px solid #eee;white-space:nowrap">${esc(item.pile || '')}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid #eee;white-space:nowrap">${lotsText}</td>
                 <td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${fmtInt(item.pounds)}</td>
                 <td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${fmtTons2(item.tons, 2)}</td>
               </tr>
+                `;
+              })()}
             `).join('')
-          : '<tr><td colspan="3" style="padding:8px;color:#666">No pile breakdown data for this day.</td></tr>';
+          : '<tr><td colspan="4" style="padding:8px;color:#666">No pile breakdown data for this day.</td></tr>';
 
         const totalsHtml = `
           <tr style="background:#f8f8f8">
             <td style="padding:5px 8px;border-top:1px solid #ddd"><b>Daily Total</b></td>
+            <td style="padding:5px 8px;border-top:1px solid #ddd">&nbsp;</td>
             <td style="padding:5px 8px;border-top:1px solid #ddd;text-align:right"><b>${fmtInt(breakdownTotal)}</b></td>
             <td style="padding:5px 8px;border-top:1px solid #ddd;text-align:right"><b>${fmtTons2(breakdownTotalTons, 2)}</b></td>
           </tr>
@@ -1566,6 +1608,7 @@ function wireBucketLoadingPopupEvents(container, marker) {
             <thead>
               <tr style="background:#f4f6f8">
                 <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #ddd">Pile Utilized</th>
+                <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #ddd">Material</th>
                 <th style="padding:4px 8px;text-align:right;border-bottom:1px solid #ddd">Pounds</th>
                 <th style="padding:4px 8px;text-align:right;border-bottom:1px solid #ddd">Tons</th>
               </tr>
@@ -2496,26 +2539,52 @@ function isPastDueExempt(marker, stockIndex) {
     const res = await fetch(consumptionCsvUrl);
     if (!res.ok) throw new Error(`Failed to fetch ${consumptionCsvUrl}: ${res.status}`);
     const text = await res.text();
-    // A: Day | B: Consumed | C: Net_Tons | D: blank | E: Pile | F: Total_Actual | G: Avg_Daily
-    const lines = text.split(/\r?\n/);
+    // New fixed format:
+    // A: Pile Number | B: Material Lot # | C: Total Lbs consumed | D: Total Tons consumed
+    // E1: Days represented by this monthly total (manually maintained)
+    const lines = text.split(/\r?\n/).filter(l => String(l || '').trim() !== '');
     if (!lines.length) throw new Error("Consumption CSV is empty.");
-    const header = (lines[0] || "").trim();
-    const expected = "Day,Consumed,Net_Tons,,Pile,Total_Actual,Avg_Daily";
-    if (!header.startsWith(expected)) {
-      console.warn("Consumption CSV header did not match side-by-side format:", header);
-    }
-    const pileAvgByCode = {}; // { CODE -> avgDaily }
+
+    const headerParts = parseCsvLine(lines[0]).map(v => String(v || '').trim());
+    const headerNorm = headerParts.map(v => v.toLowerCase());
+    const findCol = (...names) => {
+      const wanted = names.map(n => String(n).toLowerCase());
+      return headerNorm.findIndex(h => wanted.includes(h));
+    };
+
+    const pileCol = findCol('pile_number', 'pile number', 'pile', 'pile #', 'pile#');
+    const totalLbsCol = findCol('total_lbs', 'total lbs', 'total_lbs consumed', 'total lbs consumed');
+    const resolvedPileCol = pileCol >= 0 ? pileCol : 0;
+    const resolvedTotalLbsCol = totalLbsCol >= 0 ? totalLbsCol : 2;
+
+    const { year, month } = getCurrentInventoryPeriod();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const configuredDays = Number(String(headerParts[4] || '').trim());
+    const dayDivisor = (Number.isFinite(configuredDays) && configuredDays > 0)
+      ? configuredDays
+      : Math.max(1, daysInMonth);
+
+    const pileTotalsByCode = {}; // { CODE -> totalLbs }
     for (let i = 1; i < lines.length; i++) {
       const raw = lines[i];
       if (!raw) continue;
-      const parts = raw.split(",");
-      if (parts.length < 7) continue;
-      const pile = (parts[4] || "").trim().toUpperCase(); // column E
-      const avgStr = (parts[6] || "").trim();             // column G
+      const parts = parseCsvLine(raw);
+      if (parts.length < 3) continue;
+
+      const pile = normalizePileCode(parts[resolvedPileCol]);
       if (!pile) continue;
-      const avg = Number(avgStr);
-      pileAvgByCode[pile] = Number.isFinite(avg) ? avg : 0;
+
+      const totalLbs = Number(String(parts[resolvedTotalLbsCol] || '').replace(/,/g, '').trim());
+      if (!Number.isFinite(totalLbs)) continue;
+
+      pileTotalsByCode[pile] = (pileTotalsByCode[pile] || 0) + totalLbs;
     }
+
+    const pileAvgByCode = {};
+    Object.entries(pileTotalsByCode).forEach(([code, totalLbs]) => {
+      pileAvgByCode[code] = totalLbs / dayDivisor;
+    });
+
     return { pileAvgByCode };
   }
 
@@ -2535,13 +2604,12 @@ if (!XLSXlib || !XLSXlib.utils) {
   console.error('XLSX missing or invalid:', window.XLSX);
   return;
 }
-``
 
     // Fetch consumption averages
     const { pileAvgByCode } = await fetchConsumptionCsv();
 
     const rows = pastDue.map(p => {
-      const codeKey = p.code?.trim().toUpperCase() ?? '';
+      const codeKey = normalizePileCode(p.code);
       const invLbs = typeof p.invLbs === 'number' ? Math.max(0, p.invLbs) : 0;
       const avgDaily = pileAvgByCode[codeKey] ?? 0;
       const dud = avgDaily > 0 ? invLbs / avgDaily : 0;
