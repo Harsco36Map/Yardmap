@@ -112,7 +112,6 @@
   {"type":"Coils","name":"94C 436St"},
   {"type":"Coils","name":"95C 436 Home"},
   {"type":"Coils","name":"95J 446 Home"},
-{"type":"Tundish","name":"EVCt","lat":40.793921172124534,"lng":-82.53828533805394},
 {"type":"Reclaim","name":"EVCrc","lat":40.793813713003665,"lng":-82.53804611041147},
 {"type":"Other","name":"Rejected 430 #H77977","lat":40.79406863878592,"lng":-82.53815352916719},
 {"type":"Other","name":"956 447 Home DO NOT USE","lat":40.79466034939142,"lng":-82.53642541903908},
