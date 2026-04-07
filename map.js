@@ -1351,6 +1351,81 @@ async function fetchBucketLoadingConsumption(force = false) {
     }
   }
 
+  // ---- Consumption4: heat-level material breakdown ----
+  const heatBreakdownByIsoDate = {};
+  const consumption4 = findSheetByName(workbook, 'Consumption4');
+  if (consumption4) {
+    const data4 = window.XLSX.utils.sheet_to_json(consumption4, { header: 1, raw: false });
+    if (Array.isArray(data4) && data4.length >= 2) {
+      const header4 = Array.isArray(data4[0]) ? data4[0] : [];
+      const header4Norm = header4.map(h => String(h || '').trim().toLowerCase());
+      const findCol4 = (...names) => {
+        for (const name of names) {
+          const idx = header4Norm.findIndex(h => h === String(name).toLowerCase());
+          if (idx >= 0) return idx;
+        }
+        return -1;
+      };
+
+      const date4Col  = (() => { const i = findCol4('date'); return i >= 0 ? i : 0; })();
+      const heat4Col  = (() => { const i = findCol4('heat number', 'heat #', 'heat'); return i >= 0 ? i : 1; })();
+      const grade4Col = (() => { const i = findCol4('grade'); return i >= 0 ? i : 2; })();
+      const pile4Col  = (() => { const i = findCol4('pile', 'pile #', 'pile utilized'); return i >= 0 ? i : 3; })();
+      const lot4Col   = (() => { const i = findCol4('material lot #', 'lot #', 'lot'); return i >= 0 ? i : 4; })();
+      const lbs4Col   = (() => { const i = findCol4('total pounds', 'pounds', 'lbs'); return i >= 0 ? i : 5; })();
+      const tons4Col  = (() => { const i = findCol4('total tons', 'tons'); return i >= 0 ? i : 6; })();
+
+      for (let r4 = 1; r4 < data4.length; r4++) {
+        const row4 = data4[r4];
+        if (!Array.isArray(row4)) continue;
+
+        const dateCell4 = row4[date4Col];
+        const parsed4 = parseXlsxDateCell(dateCell4);
+        let iso4 = '';
+        if (parsed4) {
+          iso4 = toIsoFromDate(parsed4);
+        } else {
+          const maybeDay4 = Number(String(dateCell4 || '').trim());
+          if (Number.isFinite(maybeDay4) && maybeDay4 >= 1 && maybeDay4 <= 31) {
+            iso4 = `${filterYear}-${String(filterMonth + 1).padStart(2, '0')}-${String(maybeDay4).padStart(2, '0')}`;
+          }
+        }
+        if (!iso4) continue;
+
+        const heatNum4 = String(row4[heat4Col] || '').trim();
+        const grade4   = String(row4[grade4Col] || '').trim();
+        const pile4    = normalizePileCode(row4[pile4Col]);
+        const lot4     = String(row4[lot4Col] || '').trim();
+        const lbs4     = toNum(row4[lbs4Col]);
+        const tonsCellRaw4 = row4[tons4Col];
+        const tons4    = String(tonsCellRaw4 ?? '').trim() === '' ? (lbs4 / 2000) : toNum(tonsCellRaw4);
+
+        if (!heatNum4) continue;
+
+        if (!heatBreakdownByIsoDate[iso4]) heatBreakdownByIsoDate[iso4] = {};
+        if (!heatBreakdownByIsoDate[iso4][heatNum4]) {
+          heatBreakdownByIsoDate[iso4][heatNum4] = { heatNumber: heatNum4, grade: grade4, materials: [] };
+        } else if (grade4 && !heatBreakdownByIsoDate[iso4][heatNum4].grade) {
+          heatBreakdownByIsoDate[iso4][heatNum4].grade = grade4;
+        }
+
+        if (pile4 || lot4 || lbs4) {
+          const material4 = getMaterialForLotOrPile(lot4, pile4);
+          heatBreakdownByIsoDate[iso4][heatNum4].materials.push({ pile: pile4, lot: lot4, material: material4, pounds: lbs4, tons: tons4 });
+        }
+      }
+
+      Object.keys(heatBreakdownByIsoDate).forEach(iso => {
+        const heatMap = heatBreakdownByIsoDate[iso];
+        heatBreakdownByIsoDate[iso] = Object.values(heatMap).sort((a, b) => {
+          const na = Number(a.heatNumber), nb = Number(b.heatNumber);
+          if (!isNaN(na) && !isNaN(nb)) return na - nb;
+          return String(a.heatNumber).localeCompare(String(b.heatNumber));
+        });
+      });
+    }
+  }
+
   const rows = [];
   const allRows = [];
   let totalPounds = 0;
@@ -1420,7 +1495,8 @@ async function fetchBucketLoadingConsumption(force = false) {
       tons,
       bucketsLoaded,
       heatsCompleted,
-      breakdown: breakdownByIsoDate[isoDate] || []
+      breakdown: breakdownByIsoDate[isoDate] || [],
+      heatBreakdown: heatBreakdownByIsoDate[isoDate] || []
     };
 
     allRows.push(rowObj);
@@ -1482,9 +1558,12 @@ function renderBucketLoadingPopup(payload) {
       <td style="padding:2px 6px;text-align:right">${fmtInt(r.pounds)}</td>
       <td style="padding:2px 6px;text-align:right">${fmtTons2(r.tons, 2)}</td>
       <td style="padding:2px 6px;text-align:right">${fmtInt(r.bucketsLoaded)}</td>
-      <td style="padding:2px 6px;text-align:right">${fmtInt(r.heatsCompleted)}</td>
+      <td style="padding:2px 6px;text-align:right">${r.heatBreakdown && r.heatBreakdown.length > 0 ? `<button type="button" class="bucket-loading-heat-link" data-date="${esc(r.isoDate)}" style="border:none;background:none;color:#0b57d0;text-decoration:underline;padding:0;cursor:pointer;font:inherit">${fmtInt(r.heatsCompleted)}</button>` : fmtInt(r.heatsCompleted)}</td>
     </tr>
     <tr class="bucket-loading-detail-row" data-date="${esc(r.isoDate)}" style="display:none;background:#fafafa">
+      <td colspan="5" style="padding:6px 10px"></td>
+    </tr>
+    <tr class="bucket-loading-heat-detail-row" data-date="${esc(r.isoDate)}" style="display:none;background:#f0f4ff">
       <td colspan="5" style="padding:6px 10px"></td>
     </tr>
   `).join('');
@@ -1536,6 +1615,13 @@ function wireBucketLoadingPopupEvents(container, marker) {
     block.addEventListener('click', e => e.stopPropagation());
   }
 
+  // Closes every expanded detail row of either type, optionally skipping one element.
+  function closeAllDetailRows(except) {
+    container.querySelectorAll('.bucket-loading-detail-row, .bucket-loading-heat-detail-row').forEach(dr => {
+      if (dr !== except) dr.style.display = 'none';
+    });
+  }
+
   const dateLinks = container.querySelectorAll('.bucket-loading-date-link');
   if (dateLinks && dateLinks.length > 0) {
     dateLinks.forEach(link => {
@@ -1550,20 +1636,16 @@ function wireBucketLoadingPopupEvents(container, marker) {
         const dayRow = rows.find(r => String(r.isoDate || '') === dateKey);
         if (!dayRow) return;
 
-        const allDetailRows = container.querySelectorAll('.bucket-loading-detail-row');
-        allDetailRows.forEach(dr => {
-          if (dr.getAttribute('data-date') !== dateKey) {
-            dr.style.display = 'none';
-          }
-        });
-
-        const detailRows = container.querySelectorAll('.bucket-loading-detail-row');
-        const detailRow = Array.from(detailRows).find(dr => dr.getAttribute('data-date') === dateKey);
+        const detailRow = Array.from(container.querySelectorAll('.bucket-loading-detail-row'))
+          .find(dr => dr.getAttribute('data-date') === dateKey);
         if (!detailRow) return;
 
         const currentlyVisible = detailRow.style.display !== 'none';
-        detailRow.style.display = currentlyVisible ? 'none' : '';
+        // Close everything (including this row if toggling off)
+        closeAllDetailRows(null);
         if (currentlyVisible) return;
+
+        detailRow.style.display = '';
 
         const detailCell = detailRow.querySelector('td');
         if (!detailCell) return;
@@ -1572,25 +1654,19 @@ function wireBucketLoadingPopupEvents(container, marker) {
         const breakdownTotal = breakdownRows.reduce((sum, item) => sum + (Number(item.pounds) || 0), 0);
         const breakdownTotalTons = breakdownRows.reduce((sum, item) => sum + (Number(item.tons) || 0), 0);
         const breakdownHtml = breakdownRows.length > 0
-          ? breakdownRows.map(item => `
-              ${(() => {
-                const lots = Array.isArray(item.lots) ? item.lots : [];
-                const lotsText = lots.length > 0
-                  ? lots.map(x => {
-                      const materialText = esc(x.material || '');
-                      return materialText || '—';
-                    }).join('<br>')
-                  : '—';
-                return `
+          ? breakdownRows.map(item => {
+              const lots = Array.isArray(item.lots) ? item.lots : [];
+              const lotsText = lots.length > 0
+                ? lots.map(x => esc(x.material || '') || '—').join('<br>')
+                : '—';
+              return `
               <tr>
                 <td style="padding:4px 8px;border-bottom:1px solid #eee;white-space:nowrap">${esc(item.pile || '')}</td>
                 <td style="padding:4px 8px;border-bottom:1px solid #eee;white-space:nowrap">${lotsText}</td>
                 <td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${fmtInt(item.pounds)}</td>
                 <td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${fmtTons2(item.tons, 2)}</td>
-              </tr>
-                `;
-              })()}
-            `).join('')
+              </tr>`;
+            }).join('')
           : '<tr><td colspan="4" style="padding:8px;color:#666">No pile breakdown data for this day.</td></tr>';
 
         const totalsHtml = `
@@ -1599,8 +1675,7 @@ function wireBucketLoadingPopupEvents(container, marker) {
             <td style="padding:5px 8px;border-top:1px solid #ddd">&nbsp;</td>
             <td style="padding:5px 8px;border-top:1px solid #ddd;text-align:right"><b>${fmtInt(breakdownTotal)}</b></td>
             <td style="padding:5px 8px;border-top:1px solid #ddd;text-align:right"><b>${fmtTons2(breakdownTotalTons, 2)}</b></td>
-          </tr>
-        `;
+          </tr>`;
 
         detailCell.innerHTML = `
           <div style="font-size:12px;color:#444;margin-bottom:4px"><b>${esc(dayRow.dateLabel)}</b> pile usage breakdown</div>
@@ -1614,8 +1689,130 @@ function wireBucketLoadingPopupEvents(container, marker) {
               </tr>
             </thead>
             <tbody>${breakdownHtml}${totalsHtml}</tbody>
+          </table>`;
+      });
+    });
+  }
+
+  const heatLinks = container.querySelectorAll('.bucket-loading-heat-link');
+  if (heatLinks && heatLinks.length > 0) {
+    heatLinks.forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const dateKey = String(link.getAttribute('data-date') || '').trim();
+        if (!dateKey) return;
+
+        const rowsData = Array.isArray(window.currentBucketLoadingRows) ? window.currentBucketLoadingRows : [];
+        const dayRow = rowsData.find(r => String(r.isoDate || '') === dateKey);
+        if (!dayRow) return;
+
+        const heatDetailRow = Array.from(container.querySelectorAll('.bucket-loading-heat-detail-row'))
+          .find(dr => dr.getAttribute('data-date') === dateKey);
+        if (!heatDetailRow) return;
+
+        const currentlyVisible = heatDetailRow.style.display !== 'none';
+        // Close everything (including this row if toggling off)
+        closeAllDetailRows(null);
+        if (currentlyVisible) return;
+
+        heatDetailRow.style.display = '';
+
+        const detailCell = heatDetailRow.querySelector('td');
+        if (!detailCell) return;
+
+        const heats = Array.isArray(dayRow.heatBreakdown) ? dayRow.heatBreakdown : [];
+        if (heats.length === 0) {
+          detailCell.innerHTML = '<div style="padding:8px;color:#666;font-size:12px">No heat detail data for this day.</div>';
+          return;
+        }
+
+        // Build accordion: one header row per heat, collapsed material rows below each.
+        const accordionRowsHtml = heats.map((heat, hIdx) => {
+          const mats = Array.isArray(heat.materials) ? heat.materials : [];
+          const heatTotalLbs  = mats.reduce((s, m) => s + (Number(m.pounds) || 0), 0);
+          const heatTotalTons = mats.reduce((s, m) => s + (Number(m.tons)   || 0), 0);
+
+          const matsHtml = mats.length > 0
+            ? mats.map(m => `
+                <tr class="heat-mat-row" data-heat-idx="${hIdx}" style="display:none;background:#f7f8ff">
+                  <td style="padding:3px 8px 3px 24px;border-bottom:1px solid #e8edf8;white-space:nowrap">${esc(m.pile || '—')}</td>
+                  <td style="padding:3px 8px;border-bottom:1px solid #e8edf8;white-space:normal;overflow-wrap:anywhere;line-height:1.2">
+                    <div>${esc(m.material || '—')}</div>
+                  </td>
+                  <td style="padding:3px 8px;border-bottom:1px solid #e8edf8;text-align:right;white-space:nowrap">${fmtInt(m.pounds)}</td>
+                  <td style="padding:3px 8px;border-bottom:1px solid #e8edf8;text-align:right;white-space:nowrap">${fmtTons2(m.tons, 3)}</td>
+                </tr>`).join('')
+            : `<tr class="heat-mat-row" data-heat-idx="${hIdx}" style="display:none;background:#f7f8ff">
+                 <td colspan="4" style="padding:4px 8px 4px 24px;color:#888;font-style:italic">No material records</td>
+               </tr>`;
+
+          const chevron = mats.length > 0
+            ? `<span class="heat-chevron" style="font-size:10px;margin-right:4px;display:inline-block;transition:transform 0.15s">▶</span>`
+            : `<span style="font-size:10px;margin-right:4px;color:#bbb">—</span>`;
+
+          return `
+            <tr class="heat-accordion-header" data-heat-idx="${hIdx}"
+                style="cursor:${mats.length > 0 ? 'pointer' : 'default'};border-bottom:1px solid #c8d4f0">
+              <td style="padding:5px 8px;white-space:nowrap;font-weight:600">${chevron}${esc(heat.heatNumber)}</td>
+              <td style="padding:5px 8px;white-space:nowrap">${esc(heat.grade)}</td>
+              <td style="padding:5px 8px;text-align:right">${fmtInt(heatTotalLbs)}</td>
+              <td style="padding:5px 8px;text-align:right">${fmtTons2(heatTotalTons, 3)}</td>
+            </tr>
+            <tr class="heat-mat-subheader heat-mat-row" data-heat-idx="${hIdx}" style="display:none;background:#dce4f7;font-size:11px">
+              <th style="padding:2px 8px 2px 24px;text-align:left;font-weight:600;border-bottom:1px solid #c8d4f0">Pile</th>
+              <th style="padding:2px 8px;text-align:left;font-weight:600;border-bottom:1px solid #c8d4f0">Material</th>
+              <th style="padding:2px 8px;text-align:right;font-weight:600;border-bottom:1px solid #c8d4f0">Pounds</th>
+              <th style="padding:2px 8px;text-align:right;font-weight:600;border-bottom:1px solid #c8d4f0">Tons</th>
+            </tr>
+            ${matsHtml}`;
+        }).join('');
+
+        detailCell.innerHTML = `
+          <div style="font-size:12px;color:#444;margin-bottom:4px">
+            <b>${esc(dayRow.dateLabel)}</b> — heat consumption detail
+            <span style="color:#888;font-weight:normal">(${heats.length} heat${heats.length !== 1 ? 's' : ''} — click a row to expand)</span>
+          </div>
+          <div style="width:100%;max-width:100%;overflow-x:auto">
+          <table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;background:#fff">
+            <thead>
+              <tr style="background:#e8edf8">
+                <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #c8d4f0">Heat #</th>
+                <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #c8d4f0">Grade</th>
+                <th style="padding:4px 8px;text-align:right;border-bottom:1px solid #c8d4f0">Total Lbs</th>
+                <th style="padding:4px 8px;text-align:right;border-bottom:1px solid #c8d4f0">Total Tons</th>
+              </tr>
+            </thead>
+            <tbody>${accordionRowsHtml}</tbody>
           </table>
-        `;
+          </div>`;
+
+        // Wire accordion toggle for each heat header row
+        detailCell.querySelectorAll('.heat-accordion-header').forEach(headerRow => {
+          const hIdx = headerRow.getAttribute('data-heat-idx');
+          const heat = heats[Number(hIdx)];
+          if (!heat || !Array.isArray(heat.materials) || heat.materials.length === 0) return;
+
+          headerRow.addEventListener('click', () => {
+            const matRows = detailCell.querySelectorAll(`.heat-mat-row[data-heat-idx="${hIdx}"]`);
+            const chevron = headerRow.querySelector('.heat-chevron');
+            const isOpen = matRows.length > 0 && matRows[0].style.display !== 'none';
+
+            // Collapse all other open heats first
+            detailCell.querySelectorAll('.heat-accordion-header').forEach(otherHeader => {
+              const oIdx = otherHeader.getAttribute('data-heat-idx');
+              if (oIdx === hIdx) return;
+              detailCell.querySelectorAll(`.heat-mat-row[data-heat-idx="${oIdx}"]`)
+                .forEach(r => { r.style.display = 'none'; });
+              const otherChevron = otherHeader.querySelector('.heat-chevron');
+              if (otherChevron) otherChevron.style.transform = '';
+            });
+
+            matRows.forEach(r => { r.style.display = isOpen ? 'none' : ''; });
+            if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(90deg)';
+          });
+        });
       });
     });
   }
@@ -2102,12 +2299,17 @@ function isPastDueExempt(marker, stockIndex) {
     return markers.map(m => {
       const code = extractPileCode(m.name);
       const s = code ? stockIndexGlobal[code] : null;
+      const lz = s?.last_zero_date ?? '';
+      const dt = parseMDY(lz);
+      const ageMonths = dt ? monthsDiff(dt, new Date()) : null;
       return {
         code,
         name: m.name,
         material: s?.material ?? '',
         marker: m._leaflet,
-        type: m.type
+        type: m.type,
+        lastZero: lz,
+        ageLabel: (ageMonths !== null && ageMonths >= 0) ? formatAgeYM(ageMonths) : ''
       };
     });
   }
@@ -2351,6 +2553,7 @@ function isPastDueExempt(marker, stockIndex) {
               <div style="color: #666; margin-top: 4px;">
                 ${p.name}
               </div>
+              ${lz ? `<div style="color:#888;margin-top:3px;font-size:11px">Last Zero: <span style="${codeStyle}">${lz}</span>${p.ageLabel ? ` · <span style="${codeStyle}">${p.ageLabel}</span>` : ''}</div>` : ''}
             </div>
             <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
               ${iconHtml}
