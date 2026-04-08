@@ -1375,6 +1375,10 @@ async function fetchBucketLoadingConsumption(force = false) {
       const lbs4Col   = (() => { const i = findCol4('total pounds', 'pounds', 'lbs'); return i >= 0 ? i : 5; })();
       const tons4Col  = (() => { const i = findCol4('total tons', 'tons'); return i >= 0 ? i : 6; })();
 
+      // Build per-heat, per-day buckets first, then keep each heat only on its latest day.
+      // This prevents carryover heats from showing on both start day and completion day.
+      const heatBucketsByNumber = {};
+
       for (let r4 = 1; r4 < data4.length; r4++) {
         const row4 = data4[r4];
         if (!Array.isArray(row4)) continue;
@@ -1402,18 +1406,44 @@ async function fetchBucketLoadingConsumption(force = false) {
 
         if (!heatNum4) continue;
 
-        if (!heatBreakdownByIsoDate[iso4]) heatBreakdownByIsoDate[iso4] = {};
-        if (!heatBreakdownByIsoDate[iso4][heatNum4]) {
-          heatBreakdownByIsoDate[iso4][heatNum4] = { heatNumber: heatNum4, grade: grade4, materials: [] };
-        } else if (grade4 && !heatBreakdownByIsoDate[iso4][heatNum4].grade) {
-          heatBreakdownByIsoDate[iso4][heatNum4].grade = grade4;
+        if (!heatBucketsByNumber[heatNum4]) {
+          heatBucketsByNumber[heatNum4] = {};
+        }
+        if (!heatBucketsByNumber[heatNum4][iso4]) {
+          heatBucketsByNumber[heatNum4][iso4] = { heatNumber: heatNum4, grade: grade4, materials: [] };
+        } else if (grade4 && !heatBucketsByNumber[heatNum4][iso4].grade) {
+          heatBucketsByNumber[heatNum4][iso4].grade = grade4;
         }
 
         if (pile4 || lot4 || lbs4) {
           const material4 = getMaterialForLotOrPile(lot4, pile4);
-          heatBreakdownByIsoDate[iso4][heatNum4].materials.push({ pile: pile4, lot: lot4, material: material4, pounds: lbs4, tons: tons4 });
+          heatBucketsByNumber[heatNum4][iso4].materials.push({ pile: pile4, lot: lot4, material: material4, pounds: lbs4, tons: tons4 });
         }
       }
+
+      Object.keys(heatBucketsByNumber).forEach(heatNum => {
+        const byIso = heatBucketsByNumber[heatNum];
+        const isoKeys = Object.keys(byIso);
+        if (isoKeys.length === 0) return;
+
+        // ISO date strings sort chronologically (YYYY-MM-DD).
+        const latestIso = isoKeys.sort().slice(-1)[0];
+        if (!heatBreakdownByIsoDate[latestIso]) heatBreakdownByIsoDate[latestIso] = {};
+
+        const selected = byIso[latestIso];
+        if (!heatBreakdownByIsoDate[latestIso][heatNum]) {
+          heatBreakdownByIsoDate[latestIso][heatNum] = {
+            heatNumber: selected.heatNumber,
+            grade: selected.grade,
+            materials: []
+          };
+        }
+
+        heatBreakdownByIsoDate[latestIso][heatNum].materials.push(...(selected.materials || []));
+        if (!heatBreakdownByIsoDate[latestIso][heatNum].grade && selected.grade) {
+          heatBreakdownByIsoDate[latestIso][heatNum].grade = selected.grade;
+        }
+      });
 
       Object.keys(heatBreakdownByIsoDate).forEach(iso => {
         const heatMap = heatBreakdownByIsoDate[iso];
@@ -1487,6 +1517,11 @@ async function fetchBucketLoadingConsumption(force = false) {
       }
     }
 
+    const heatBreakdownForDate = heatBreakdownByIsoDate[isoDate] || [];
+    const resolvedHeatsCompleted = heatBreakdownForDate.length > 0
+      ? heatBreakdownForDate.length
+      : heatsCompleted;
+
     const rowObj = {
       day: dayNum,
       dateLabel,
@@ -1494,9 +1529,9 @@ async function fetchBucketLoadingConsumption(force = false) {
       pounds: lbs,
       tons,
       bucketsLoaded,
-      heatsCompleted,
+      heatsCompleted: resolvedHeatsCompleted,
       breakdown: breakdownByIsoDate[isoDate] || [],
-      heatBreakdown: heatBreakdownByIsoDate[isoDate] || []
+      heatBreakdown: heatBreakdownForDate
     };
 
     allRows.push(rowObj);
