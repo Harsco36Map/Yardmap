@@ -1637,6 +1637,25 @@ function wireBucketLoadingPopupEvents(container, marker) {
   const toggle = container.querySelector('#bucketLoadingToggle');
   const block = container.querySelector('#bucketLoadingActivity');
 
+  function setBucketLinkState(link, isActive) {
+    if (!link) return;
+    link.style.color = isActive ? '#c62828' : '#0b57d0';
+    link.style.fontWeight = isActive ? '700' : '400';
+  }
+
+  function clearBucketLinkStates() {
+    container.querySelectorAll('.bucket-loading-date-link, .bucket-loading-heat-link').forEach(link => {
+      setBucketLinkState(link, false);
+    });
+  }
+
+  function setActiveBucketLink(selector, dateKey) {
+    clearBucketLinkStates();
+    if (!dateKey) return;
+    const activeLink = container.querySelector(`${selector}[data-date="${dateKey}"]`);
+    if (activeLink) setBucketLinkState(activeLink, true);
+  }
+
   if (block) block.style.display = 'none';
 
   if (toggle && block) {
@@ -1655,6 +1674,7 @@ function wireBucketLoadingPopupEvents(container, marker) {
     container.querySelectorAll('.bucket-loading-detail-row, .bucket-loading-heat-detail-row').forEach(dr => {
       if (dr !== except) dr.style.display = 'none';
     });
+    if (!except) clearBucketLinkStates();
   }
 
   const dateLinks = container.querySelectorAll('.bucket-loading-date-link');
@@ -1681,6 +1701,7 @@ function wireBucketLoadingPopupEvents(container, marker) {
         if (currentlyVisible) return;
 
         detailRow.style.display = '';
+        setActiveBucketLink('.bucket-loading-date-link', dateKey);
 
         const detailCell = detailRow.querySelector('td');
         if (!detailCell) return;
@@ -1753,6 +1774,7 @@ function wireBucketLoadingPopupEvents(container, marker) {
         if (currentlyVisible) return;
 
         heatDetailRow.style.display = '';
+        setActiveBucketLink('.bucket-loading-heat-link', dateKey);
 
         const detailCell = heatDetailRow.querySelector('td');
         if (!detailCell) return;
