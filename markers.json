@@ -101,6 +101,7 @@
   {"type":"Coils","name":"32C 409 Home"},
   {"type":"Coils","name":"38C 439 Home"},
   {"type":"Coils","name":"40A 409St"},
+  {"type":"Coils","name":"50A 430St"},
   {"type":"Coils","name":"51C 430/440 Home"},
   {"type":"Coils","name":"59A 181 Home"},
   {"type":"Coils","name":"64C 409Ni"},
