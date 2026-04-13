@@ -84,6 +84,7 @@ function collapseOthers(exceptId) {
 
 let allMarkersData = [];
 let stockIndexGlobal = {};
+let stoppedPileCodesGlobal = new Set();
 let searchMode = 'all'; // 'all' | 'pastDue'
 let isSearchModalOpen = false;
 
@@ -229,48 +230,23 @@ Object.keys(loadCellMarkers).forEach(id => {
     div.style.margin = '8px';
     div.style.font = '12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif';
     div.style.boxShadow = '0 1px 3px rgba(0,0,0,0.15)';
-    div.textContent = 'Inventory data current as of —';
+    div.innerHTML = '<div>Inventory data current as of —</div><div style="margin-top:4px;color:#555">Total yard inventory: —</div>';
     return div;
   };
   ctrl.addTo(map);
   fetchLatestInventoryCsv().then(payload => {
     const d = payload && payload.meta && payload.meta.report_date;
+    const totalInventoryLbs = payload && payload.meta && payload.meta.total_inventory_lbs;
     const banner = document.getElementById('invBanner');
-    if (banner && d) {
-      // Format date from "DD-MMM-YYYY HH:MM:SS" to "Month-Day" (e.g., "March-26")
-      const dateStr = d.trim();
-      let formattedDate = dateStr;
-      
-      // Try to parse DD-MMM-YYYY format (e.g., "25-MAR-2026")
-      const dateParts = dateStr.match(/(\d{1,2})-([A-Za-z]{3})-(\d{4})/);
-      if (dateParts) {
-        const day = parseInt(dateParts[1], 10);
-        const monthStr = dateParts[2].toUpperCase();
-        const monthMap = {
-          'JAN': 'January', 'FEB': 'February', 'MAR': 'March', 'APR': 'April',
-          'MAY': 'May', 'JUN': 'June', 'JUL': 'July', 'AUG': 'August',
-          'SEP': 'September', 'OCT': 'October', 'NOV': 'November', 'DEC': 'December'
-        };
-        const monthName = monthMap[monthStr];
-        if (monthName) {
-          formattedDate = `${monthName}-${day}`;
-        }
-      }
-      // Fallback: also try MM/DD/YYYY format (in case data format changes)
-      else {
-        const mdy = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-        if (mdy) {
-          const month = parseInt(mdy[1], 10);
-          const day = parseInt(mdy[2], 10);
-          const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
-                            'July', 'August', 'September', 'October', 'November', 'December'];
-          if (month >= 1 && month <= 12) {
-            formattedDate = `${monthNames[month - 1]}-${day}`;
-          }
-        }
-      }
-      
-      banner.textContent = `Inventory data current as of ${formattedDate}`;
+    if (banner) {
+      const formattedDate = formatInventoryBannerDate(d);
+      const inventoryText = typeof totalInventoryLbs === 'number' && isFinite(totalInventoryLbs)
+        ? totalInventoryLbs.toLocaleString('en-US') + ' lbs'
+        : '—';
+      banner.innerHTML = `
+        <div>Inventory data current as of ${formattedDate}</div>
+        <div style="margin-top:4px;color:#555">Total yard inventory: <b>${inventoryText}</b></div>
+      `;
     }
   }).catch(err => console.warn('stockData.json meta fetch failed:', err));
 })();
@@ -341,6 +317,68 @@ function getCurrentInventoryPeriod() {
   const year = Number.isInteger(latestInventoryPeriod.year) ? latestInventoryPeriod.year : new Date().getFullYear();
   const month = Number.isInteger(latestInventoryPeriod.month) ? latestInventoryPeriod.month : new Date().getMonth();
   return { year, month };
+}
+
+function getCurrentInventoryMonthLabel() {
+  const { year, month } = getCurrentInventoryPeriod();
+  return new Date(year, month, 1).toLocaleString('en-US', { month: 'long' });
+}
+
+function formatInventoryBannerDate(dateStr) {
+  const parsed = parseInventoryReportDate(dateStr);
+  if (!parsed) return String(dateStr || '—').trim() || '—';
+  return `${parsed.toLocaleString('en-US', { month: 'long' })}-${parsed.getDate()}`;
+}
+
+function getDateWeekdayLetter(dateValue) {
+  let parsed = null;
+  if (dateValue instanceof Date && isFinite(dateValue.getTime())) {
+    parsed = dateValue;
+  } else if (typeof dateValue === 'string' && dateValue.trim()) {
+    parsed = parseXlsxDateCell(dateValue);
+  }
+
+  if (!(parsed instanceof Date) || !isFinite(parsed.getTime())) return '';
+
+  const weekdayLetters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+  return weekdayLetters[parsed.getDay()] || '';
+}
+
+function getDateWeekdayColor(dateValue) {
+  let parsed = null;
+  if (dateValue instanceof Date && isFinite(dateValue.getTime())) {
+    parsed = dateValue;
+  } else if (typeof dateValue === 'string' && dateValue.trim()) {
+    parsed = parseXlsxDateCell(dateValue);
+  }
+
+  if (!(parsed instanceof Date) || !isFinite(parsed.getTime())) return '#666';
+
+  const day = parsed.getDay();
+  if (day === 0) return '#c62828';
+  if (day === 6) return '#ef6c00';
+  if (day === 3) return '#2e7d32';
+  return '#0b57d0';
+}
+
+function renderDateWithWeekday(dateValue, label, options = {}) {
+  const text = esc(label || '—');
+  const letter = getDateWeekdayLetter(dateValue);
+  if (!letter) return text;
+
+  const {
+    button = false,
+    buttonClass = '',
+    dataDate = '',
+    extraButtonStyle = ''
+  } = options;
+
+  const badge = `<span style="display:inline-block;min-width:14px;margin-right:6px;font-weight:700;color:${getDateWeekdayColor(dateValue)}">${letter}</span>`;
+  const content = `${badge}<span>${text}</span>`;
+
+  if (!button) return content;
+
+  return `<button type="button" class="${buttonClass}" data-date="${esc(dataDate)}" style="border:none;background:none;color:#0b57d0;text-decoration:underline;padding:0;cursor:pointer;font:inherit;display:inline-flex;align-items:center;${extraButtonStyle}">${content}</button>`;
 }
 
 function parseXlsxDateCell(value) {
@@ -452,6 +490,30 @@ function normalizePileCode(code) {
     return String(parseInt(raw, 10));
   }
   return raw;
+}
+
+function markerIsStopped(marker) {
+  if (!marker || typeof marker !== 'object') return false;
+  const raw = marker.stopped ?? marker.Stopped ?? marker.STOPPED;
+  if (raw === true) return true;
+  if (typeof raw === 'number') return raw !== 0;
+  const text = String(raw ?? '').trim().toLowerCase();
+  return text === 'yes' || text === 'y' || text === 'true' || text === '1' || text === 'stopped';
+}
+
+function rebuildStoppedPileCodes(markers) {
+  const out = new Set();
+  (Array.isArray(markers) ? markers : []).forEach(marker => {
+    if (!markerIsStopped(marker)) return;
+    const code = normalizePileCode(extractPileCode(marker.name));
+    if (code) out.add(code);
+  });
+  stoppedPileCodesGlobal = out;
+}
+
+function isStoppedPileCode(code) {
+  const key = normalizePileCode(code);
+  return !!key && stoppedPileCodesGlobal.has(key);
 }
 
 function normalizeLookupKey(value) {
@@ -604,6 +666,7 @@ async function fetchLatestInventoryCsv() {
   }
 
   const stock = {};
+  let totalInventoryLbs = 0;
 
   const num = v => {
     const x = Number((v ?? '').replace(/,/g, '').trim());
@@ -639,6 +702,8 @@ async function fetchLatestInventoryCsv() {
       operating_inventory_lbs: num(operatingInventory),
       last_zero_date: lastZero || ''
     };
+
+    totalInventoryLbs += stock[pile].operating_inventory_lbs;
   }
 
   const parsedInventoryDate = parseInventoryReportDate(report_date);
@@ -652,7 +717,7 @@ async function fetchLatestInventoryCsv() {
   }
 
   return {
-    meta: { report_date },
+    meta: { report_date, total_inventory_lbs: totalInventoryLbs },
     stock
   };
 }
@@ -966,6 +1031,8 @@ function renderBreakingPopup(payload, markers, stockIndex) {
     return '<b>Breaking Pit</b><div>No data.</div>';
   }
 
+  const monthLabel = getCurrentInventoryMonthLabel();
+
   // --- Breaking summary (Unprep first, then Processed; no mismatched <b>) ---
 const t = payload.totals || {};
 const totalProcessedLbs  = (typeof t.totalLbs  === 'number' && isFinite(t.totalLbs))   ? t.totalLbs  : null;
@@ -1000,7 +1067,7 @@ const summary = `
 // Activity rows - ALL for current month
   const rowsHtml = (payload.rows || []).map(r => `
     <tr>
-      <td style="padding:2px 6px;white-space:nowrap">${esc(r.dateLabel)}</td>
+      <td style="padding:2px 6px;white-space:nowrap">${renderDateWithWeekday(r.date, r.dateLabel)}</td>
       <td style="padding:2px 6px;text-align:center;white-space:nowrap">${esc(r.from)}</td>
       <td style="padding:2px 6px;text-align:center;white-space:nowrap">→</td>
       <td style="padding:2px 6px;white-space:nowrap">${esc(r.to)}</td>
@@ -1079,6 +1146,7 @@ const activity = `
   `;
 
   const body = `
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
     <div style="font-weight:700;margin-bottom:6px">Breaking Pit</div>
     ${summary}
     ${activity}
@@ -1091,6 +1159,8 @@ function renderBurningPopup(payload, markers, stockIndex) {
   if (!payload) {
     return '&lt;b&gt;Burning Station&lt;/b&gt;&lt;div&gt;No data.&lt;/div&gt;';
   }
+
+  const monthLabel = getCurrentInventoryMonthLabel();
 
   const t = payload.totals;
   const coilsRowsHtml = buildCoilsRows(markers, stockIndex);
@@ -1128,7 +1198,7 @@ const summary = `
   // Activity rows - ALL for current month
   const rowsHtml = (payload.rows || []).map(r => `
     &lt;tr&gt;
-      &lt;td style="padding:2px 6px;white-space:nowrap"&gt;${esc(r.dateLabel)}&lt;/td&gt;
+      &lt;td style="padding:2px 6px;white-space:nowrap"&gt;${renderDateWithWeekday(r.date, r.dateLabel)}&lt;/td&gt;
       &lt;td style="padding:2px 6px;text-align:center;white-space:nowrap"&gt;${esc(r.from)}&lt;/td&gt;
       &lt;td style="padding:2px 6px;text-align:center;white-space:nowrap"&gt;→&lt;/td&gt;
       &lt;td style="padding:2px 6px;white-space:nowrap"&gt;${esc(r.to)}&lt;/td&gt;
@@ -1207,6 +1277,7 @@ const summary = `
 
 
   const body = `
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
     &lt;div style="font-weight:700;margin-bottom:6px"&gt;Burning Station&lt;/div&gt;
     ${summary}
     ${activity}
@@ -1851,7 +1922,8 @@ async function fetchReceivingSummary(force = false) {
           truckNumber,
           ticketId,
           pile,
-          material: getMaterialForLotOrPile(lot, pile)
+          material: getMaterialForLotOrPile(lot, pile),
+          isStoppedPile: isStoppedPileCode(pile)
         });
       }
 
@@ -1953,6 +2025,8 @@ function renderBucketLoadingPopup(payload) {
     return '<b>Bucket Loading</b><div>No data.</div>';
   }
 
+  const monthLabel = getCurrentInventoryMonthLabel();
+
   const t = payload.totals || {};
   const totalPoundsText = (typeof t.totalPounds === 'number' && isFinite(t.totalPounds)) ? fmtInt(t.totalPounds) : '—';
   const totalTonsText = (typeof t.totalTons === 'number' && isFinite(t.totalTons)) ? fmtTons2(t.totalTons, 2) : '—';
@@ -1961,7 +2035,7 @@ function renderBucketLoadingPopup(payload) {
 
   const rowsHtml = (payload.rows || []).map(r => `
     <tr class="bucket-loading-main-row" data-date="${esc(r.isoDate)}">
-      <td style="padding:2px 6px;white-space:nowrap"><button type="button" class="bucket-loading-date-link" data-date="${esc(r.isoDate)}" style="border:none;background:none;color:#0b57d0;text-decoration:underline;padding:0;cursor:pointer;font:inherit">${esc(r.dateLabel)}</button></td>
+      <td style="padding:2px 6px;white-space:nowrap">${renderDateWithWeekday(r.isoDate, r.dateLabel, { button: true, buttonClass: 'bucket-loading-date-link', dataDate: r.isoDate })}</td>
       <td style="padding:2px 6px;text-align:right">${fmtInt(r.pounds)}</td>
       <td style="padding:2px 6px;text-align:right">${fmtTons2(r.tons, 2)}</td>
       <td style="padding:2px 6px;text-align:right">${fmtInt(r.bucketsLoaded)}</td>
@@ -1976,6 +2050,7 @@ function renderBucketLoadingPopup(payload) {
   `).join('');
 
   const body = `
+  <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
   <div style="font-weight:700;margin-bottom:6px">Bucket Loading</div>
   <div style="margin-bottom:8px;text-align:center">
     <table style="width:auto;font-size:12px;line-height:1.3;border-collapse:collapse;margin:0 auto;text-align:left">
@@ -2010,14 +2085,19 @@ function renderReceivingPopup(payload) {
     return '<b>Truck Scales</b><div>No data.</div>';
   }
 
+  const monthLabel = getCurrentInventoryMonthLabel();
+
   const t = payload.totals || {};
   const totalTrucksText = (typeof t.totalTrucks === 'number' && isFinite(t.totalTrucks)) ? fmtInt(t.totalTrucks) : '—';
   const totalWeightText = (typeof t.totalWeight === 'number' && isFinite(t.totalWeight)) ? fmtInt(t.totalWeight) : '—';
   const totalTonsText = (typeof t.totalTons === 'number' && isFinite(t.totalTons)) ? fmtTons2(t.totalTons, 2) : '—';
+  const dailyAvgWeight = (payload.rows || []).length > 0 ? (t.totalWeight / payload.rows.length) : 0;
+  const dailyAvgWeightText = Number.isFinite(dailyAvgWeight) ? fmtInt(dailyAvgWeight) : '—';
+  const dailyAvgTonsText = Number.isFinite(dailyAvgWeight) ? fmtTons2(dailyAvgWeight / 2000, 2) : '—';
 
   const rowsHtml = (payload.rows || []).map(r => `
     <tr class="receiving-main-row" data-date="${esc(r.isoDate)}">
-      <td style="padding:2px 6px;white-space:nowrap">${r.breakdown && r.breakdown.length > 0 ? `<button type="button" class="receiving-date-link" data-date="${esc(r.isoDate)}" style="border:none;background:none;color:#0b57d0;text-decoration:underline;padding:0;cursor:pointer;font:inherit">${esc(r.dateLabel)}</button>` : esc(r.dateLabel)}</td>
+      <td style="padding:2px 6px;white-space:nowrap">${r.breakdown && r.breakdown.length > 0 ? renderDateWithWeekday(r.isoDate, r.dateLabel, { button: true, buttonClass: 'receiving-date-link', dataDate: r.isoDate }) : renderDateWithWeekday(r.isoDate, r.dateLabel)}</td>
       <td style="padding:2px 6px;text-align:right">${fmtInt(r.weight)}</td>
       <td style="padding:2px 6px;text-align:right">${fmtTons2((r.weight || 0) / 2000, 2)}</td>
       <td style="padding:2px 6px;text-align:right">${r.truckDetails && r.truckDetails.length > 0 ? `<button type="button" class="receiving-trucks-link" data-date="${esc(r.isoDate)}" style="border:none;background:none;color:#0b57d0;text-decoration:underline;padding:0;cursor:pointer;font:inherit">${fmtInt(r.trucks)}</button>` : fmtInt(r.trucks)}</td>
@@ -2031,11 +2111,13 @@ function renderReceivingPopup(payload) {
   `).join('');
 
   const body = `
+  <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
   <div style="font-weight:700;margin-bottom:6px">Truck Scales</div>
   <div style="margin-bottom:8px;text-align:center">
     <table style="width:auto;font-size:12px;line-height:1.3;border-collapse:collapse;margin:0 auto;text-align:left">
-      <tr><td style="color:#666;padding:2px 6px">Total Trucks</td><td style="text-align:right;padding:2px 6px"><b>${totalTrucksText}</b></td></tr>
-      <tr><td style="color:#666;padding:2px 6px">Total Received</td><td style="text-align:right;padding:2px 6px"><b>${totalWeightText} lbs</b> <span style="color:#555">(<b>${totalTonsText} tons</b>)</span></td></tr>
+      <tr><td style="color:#666;padding:2px 6px">Total Trucks Received</td><td style="text-align:right;padding:2px 6px"><b>${totalTrucksText}</b></td></tr>
+      <tr><td style="color:#666;padding:2px 6px">Total Material Received</td><td style="text-align:right;padding:2px 6px"><b>${totalWeightText} lbs</b> <span style="color:#555">(<b>${totalTonsText} tons</b>)</span></td></tr>
+      <tr><td style="color:#666;padding:2px 6px">Daily Average Material Received</td><td style="text-align:right;padding:2px 6px"><b>${dailyAvgWeightText} lbs</b> <span style="color:#555">(<b>${dailyAvgTonsText} tons</b>)</span></td></tr>
     </table>
   </div>
   <div id="receivingActivity" style="${ACTIVITY_CONTAINER_STYLE}">
@@ -2254,8 +2336,8 @@ function wireBucketLoadingPopupEvents(container, marker) {
 
         detailCell.innerHTML = `
           <div style="font-size:12px;color:#444;margin-bottom:4px">
-            <b>${esc(dayRow.dateLabel)}</b> — heat consumption detail
-            <span style="color:#888;font-weight:normal">(${heats.length} heat${heats.length !== 1 ? 's' : ''} — click a row to expand)</span>
+            <b>${fmtInt(heats.length)} heat${heats.length !== 1 ? 's' : ''} completed on ${esc(dayRow.dateLabel)}</b>
+            <span style="color:#888;font-weight:normal"> -- Click a row to expand</span>
           </div>
           <div style="width:100%;max-width:100%;overflow-x:auto">
           <table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;background:#fff">
@@ -2431,7 +2513,7 @@ function wireReceivingPopupEvents(container, marker) {
         const truckRows = Array.isArray(dayRow.truckDetails) ? dayRow.truckDetails : [];
         const detailHtml = truckRows.length > 0
           ? `
-            <div style="font-size:11px;color:#666;margin-bottom:4px">${fmtInt(dayRow.trucks)} trucks recieved on ${esc(dayRow.dateLabel)}</div>
+            <div style="font-size:11px;color:#666;margin-bottom:4px">${fmtInt(dayRow.trucks)} trucks received on ${esc(dayRow.dateLabel)}</div>
             <table style="width:100%;font-size:12px;border-collapse:collapse">
               <thead>
                 <tr style="background:#f2f2f2">
@@ -2443,11 +2525,11 @@ function wireReceivingPopupEvents(container, marker) {
               </thead>
               <tbody>
                 ${truckRows.map(item => `
-                  <tr>
-                    <td style="padding:2px 6px">${esc(item.truckNumber || '—')}</td>
-                    <td style="padding:2px 6px">${esc(item.ticketId || '—')}</td>
-                    <td style="padding:2px 6px">${esc(item.pile || '—')}</td>
-                    <td style="padding:2px 6px">${esc(item.material || '')}</td>
+                  <tr style="${item.isStoppedPile ? 'background:#ffebee;' : ''}">
+                    <td style="padding:2px 6px;${item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : ''}">${esc(item.truckNumber || '—')}</td>
+                    <td style="padding:2px 6px;${item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : ''}">${esc(item.ticketId || '—')}</td>
+                    <td style="padding:2px 6px;${item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : ''}">${esc(item.pile || '—')}</td>
+                    <td style="padding:2px 6px;${item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : ''}">${esc(item.material || '')}</td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -2834,6 +2916,7 @@ Promise.all([
   fetchLatestInventoryCsv()
 ]).then(([markers, stockPayload]) => {
   allMarkersData = markers;                 // save globally
+  rebuildStoppedPileCodes(allMarkersData);  // keep stopped pile set in sync with markers.json
   stockIndexGlobal = stockPayload.stock || {};
   
   const unknownTypes = new Set();
