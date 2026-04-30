@@ -262,6 +262,7 @@ const burningLatLng = [40.79365495632949, -82.53501357377355];
 const breakingLatLng = [40.79408763021845, -82.5388475264302];
 const bucketLoadingLatLng = [40.79393364810161, -82.53693358538756];
 const receivingLatLng = [40.79379326877625, -82.53696516452395];
+const railcarLatLng = [40.79320323425653, -82.53296183080616];
 
 // 2) Cache + helpers --------------------------------------------------
 let totalsWorkbookCache = { at: 0, workbook: null };
@@ -269,6 +270,15 @@ let burningCache = { at: 0, data: null };
 let breakingCache = { at: 0, data: null };
 let bucketLoadingCache = { at: 0, data: null };
 let receivingCache = { at: 0, data: null };
+let railcarCache = { at: 0, data: null };
+let historyWorkbookCache = { at: 0, workbook: null };
+const receivingHistoryCache = {};
+const bucketHistoryCache = {};
+let receivingHistoryMonths = null;
+let bucketHistoryMonths = null;
+let receivingCurrentPeriod = null;
+let bucketCurrentPeriod = null;
+let railcarPhotoOverlay = null;
 let latestInventoryPeriod = { year: null, month: null };
 
 function fmtInt(n)  { return (typeof n === 'number' && isFinite(n)) ? Math.round(n).toLocaleString('en-US') : '—'; }
@@ -471,6 +481,50 @@ async function loadTotalsWorkbook(force = false) {
 
   totalsWorkbookCache = { at: now, workbook };
   return workbook;
+}
+
+async function loadHistoryWorkbook(force = false) {
+  const now = Date.now();
+  if (!force && historyWorkbookCache.workbook && (now - historyWorkbookCache.at) < 120000) {
+    return historyWorkbookCache.workbook;
+  }
+  if (!window.XLSX || !window.XLSX.read) throw new Error('XLSX library not available');
+  const res = await fetch('History.xlsx', { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Failed to fetch History.xlsx: ${res.status}`);
+  const buf = await res.arrayBuffer();
+  const workbook = window.XLSX.read(buf, { type: 'array' });
+  historyWorkbookCache = { at: now, workbook };
+  return workbook;
+}
+
+function formatMonthYear(year, month) {
+  const names = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return (names[month] || 'Month') + ' ' + year;
+}
+
+async function discoverHistoryMonths(sheetName) {
+  try {
+    const workbook = await loadHistoryWorkbook();
+    const sheet = findSheetByName(workbook, sheetName);
+    if (!sheet) return [];
+    const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+    const seen = new Map();
+    for (let i = 1; i < data.length; i++) {
+      const row = Array.isArray(data[i]) ? data[i] : [];
+      for (let c = 0; c < Math.min(row.length, 6); c++) {
+        const parsed = parseXlsxDateCell(row[c]);
+        if (parsed && !isNaN(parsed.getTime())) {
+          const key = `${parsed.getFullYear()}-${parsed.getMonth()}`;
+          if (!seen.has(key)) seen.set(key, { year: parsed.getFullYear(), month: parsed.getMonth() });
+          break;
+        }
+      }
+    }
+    return Array.from(seen.values()).sort((a, b) => b.year - a.year || b.month - a.month);
+  } catch (err) {
+    console.warn('discoverHistoryMonths failed:', err);
+    return [];
+  }
 }
 
 // ===================== GLOBAL HELPERS (must be above builders) =====================
@@ -1289,10 +1343,15 @@ const summary = `
 
 // 5) Wire popup events ------------------------------------------------
 
-async function fetchBucketLoadingConsumption(force = false) {
+async function fetchBucketLoadingConsumption(force = false, periodOverride = null) {
   const now = Date.now();
-  if (!force && bucketLoadingCache.data && (now - bucketLoadingCache.at) < 120000) {
-    return bucketLoadingCache.data;
+  if (periodOverride) {
+    const key = `${periodOverride.year}-${periodOverride.month}`;
+    if (!force && bucketHistoryCache[key]) return bucketHistoryCache[key];
+  } else {
+    if (!force && bucketLoadingCache.data && (now - bucketLoadingCache.at) < 120000) {
+      return bucketLoadingCache.data;
+    }
   }
 
   const toNum = v => {
@@ -1313,7 +1372,7 @@ async function fetchBucketLoadingConsumption(force = false) {
     return Number.isFinite(n) ? n : 0;
   };
 
-  const workbook = await loadTotalsWorkbook(force);
+  const workbook = periodOverride ? await loadHistoryWorkbook(force) : await loadTotalsWorkbook(force);
   const sheet = findSheetByName(workbook, 'Consumption1');
   if (!sheet) {
     console.warn('Consumption1 sheet not found');
@@ -1326,7 +1385,7 @@ async function fetchBucketLoadingConsumption(force = false) {
     return null;
   }
 
-  const { year: filterYear, month: filterMonth } = getCurrentInventoryPeriod();
+  const { year: filterYear, month: filterMonth } = periodOverride || getCurrentInventoryPeriod();
 
   const monthMatches = (date) => {
     return date instanceof Date && !Number.isNaN(date.getTime()) && date.getFullYear() === filterYear && date.getMonth() === filterMonth;
@@ -1695,15 +1754,24 @@ async function fetchBucketLoadingConsumption(force = false) {
     }
   };
 
-  window.currentBucketLoadingRows = rows;
-  bucketLoadingCache = { at: now, data: payload };
+  if (periodOverride) {
+    bucketHistoryCache[`${periodOverride.year}-${periodOverride.month}`] = payload;
+  } else {
+    window.currentBucketLoadingRows = rows;
+    bucketLoadingCache = { at: now, data: payload };
+  }
   return payload;
 }
 
-async function fetchReceivingSummary(force = false) {
+async function fetchReceivingSummary(force = false, periodOverride = null) {
   const now = Date.now();
-  if (!force && receivingCache.data && (now - receivingCache.at) < 120000) {
-    return receivingCache.data;
+  if (periodOverride) {
+    const key = `${periodOverride.year}-${periodOverride.month}`;
+    if (!force && receivingHistoryCache[key]) return receivingHistoryCache[key];
+  } else {
+    if (!force && receivingCache.data && (now - receivingCache.at) < 120000) {
+      return receivingCache.data;
+    }
   }
 
   const toNum = v => {
@@ -1723,7 +1791,7 @@ async function fetchReceivingSummary(force = false) {
     return Number.isFinite(n) ? n : 0;
   };
 
-  const workbook = await loadTotalsWorkbook(force);
+  const workbook = periodOverride ? await loadHistoryWorkbook(force) : await loadTotalsWorkbook(force);
   const sheet = findSheetByName(workbook, 'Receiving1');
   if (!sheet) {
     console.warn('Receiving1 sheet not found');
@@ -1736,7 +1804,7 @@ async function fetchReceivingSummary(force = false) {
     return null;
   }
 
-  const { year: filterYear, month: filterMonth } = getCurrentInventoryPeriod();
+  const { year: filterYear, month: filterMonth } = periodOverride || getCurrentInventoryPeriod();
   const monthMatches = (date) => {
     return date instanceof Date && !Number.isNaN(date.getTime()) && date.getFullYear() === filterYear && date.getMonth() === filterMonth;
   };
@@ -1884,6 +1952,14 @@ async function fetchReceivingSummary(force = false) {
       const resolvedPileCol3 = pileCol3 >= 0 ? pileCol3 : 2;
       const resolvedDateCol3 = dateCol3 >= 0 ? dateCol3 : 3;
       const resolvedLotCol3 = lotCol3 >= 0 ? lotCol3 : 4;
+      const remarksCol3 = findCol3('remarks', 'remark', 'notes', 'note');
+      const grossCol3 = findCol3('gross', 'gross weight');
+      const tareCol3 = findCol3('tare', 'tare weight');
+      const netCol3 = findCol3('net', 'net weight');
+      const resolvedRemarksCol3 = remarksCol3 >= 0 ? remarksCol3 : 5;
+      const resolvedGrossCol3 = grossCol3 >= 0 ? grossCol3 : 6;
+      const resolvedTareCol3 = tareCol3 >= 0 ? tareCol3 : 7;
+      const resolvedNetCol3 = netCol3 >= 0 ? netCol3 : 8;
 
       for (let r3 = hasHeaderRow3 ? 1 : 0; r3 < data3.length; r3++) {
         const row3 = data3[r3];
@@ -1911,6 +1987,10 @@ async function fetchReceivingSummary(force = false) {
         const lot = String(lotCell3 || '').trim();
         const truckNumber = String(truckCell3 || '').trim();
         const ticketId = String(ticketCell3 || '').trim();
+        const remarks = String(row3[resolvedRemarksCol3] || '').trim();
+        const gross = String(row3[resolvedGrossCol3] || '').trim();
+        const tare = String(row3[resolvedTareCol3] || '').trim();
+        const net = String(row3[resolvedNetCol3] || '').trim();
 
         if (!truckNumber && !ticketId && !pile && !lot) continue;
 
@@ -1923,7 +2003,11 @@ async function fetchReceivingSummary(force = false) {
           ticketId,
           pile,
           material: getMaterialForLotOrPile(lot, pile),
-          isStoppedPile: isStoppedPileCode(pile)
+          isStoppedPile: isStoppedPileCode(pile),
+          remarks,
+          gross,
+          tare,
+          net
         });
       }
 
@@ -2015,9 +2099,92 @@ async function fetchReceivingSummary(force = false) {
     }
   };
 
-  window.currentReceivingRows = rows;
-  receivingCache = { at: now, data: payload };
+  if (periodOverride) {
+    receivingHistoryCache[`${periodOverride.year}-${periodOverride.month}`] = payload;
+  } else {
+    window.currentReceivingRows = rows;
+    receivingCache = { at: now, data: payload };
+  }
   return payload;
+}
+
+async function fetchRailcarSummary(force = false) {
+  const now = Date.now();
+  if (!force && railcarCache.data && (now - railcarCache.at) < 120000) {
+    return railcarCache.data;
+  }
+
+  const workbook = await loadTotalsWorkbook(force);
+  const sheet = findSheetByName(workbook, 'Railcars');
+  if (!sheet) {
+    console.warn('Railcars sheet not found');
+    return null;
+  }
+
+  const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+  if (!Array.isArray(data) || data.length < 3) {
+    console.warn('Railcars sheet has insufficient data');
+    return null;
+  }
+
+  const railcars = [];
+  let i = 2; // skip 2 header rows
+
+  while (i < data.length) {
+    const primary = Array.isArray(data[i]) ? data[i] : [];
+    const railcarNum = String(primary[0] || '').trim();
+
+    if (!railcarNum) { i++; continue; }
+
+    const next = (i + 1 < data.length && Array.isArray(data[i + 1])) ? data[i + 1] : [];
+    const hasSecondary = !String(next[0] || '').trim(); // secondary row has blank col A
+
+    const statusA = String(primary[11] || '').trim();
+    const statusB = hasSecondary ? String(next[11] || '').trim() : '';
+    const status = [statusA, statusB].filter(Boolean).join(' ');
+
+    railcars.push({
+      railcarNum,
+      po:           String(primary[1] || '').trim(),
+      supplier:     String(primary[2] || '').trim(),
+      lot:          String(primary[3] || '').trim(),
+      material:     String(primary[4] || '').trim(),
+      shipperGross: String(primary[5] || '').trim(),
+      shipperTare:  String(primary[6] || '').trim(),
+      shipperNet:   String(primary[7] || '').trim(),
+      ourGross:     String(primary[8] || '').trim(),
+      ourTare:      String(primary[9] || '').trim(),
+      pile:         String(primary[10] || '').trim(),
+      status,
+      mainSupplier: hasSecondary ? String(next[2] || '').trim() : '',
+      consistency:  hasSecondary ? String(next[3] || '').trim() : '',
+      regrade:      hasSecondary ? String(next[4] || '').trim() : ''
+    });
+
+    i += hasSecondary ? 2 : 1;
+  }
+
+  const active = railcars.filter(c => !c.status);
+  const released = railcars.filter(c => !!c.status);
+
+  const payload = { railcars, active, released };
+  railcarCache = { at: now, data: payload };
+  return payload;
+}
+
+function buildMonthSelectorHtml(prefix, currentPeriod, historyMonths) {
+  const currentLabel = getCurrentInventoryMonthLabel();
+  const displayLabel = currentPeriod ? formatMonthYear(currentPeriod.year, currentPeriod.month) : currentLabel;
+  if (historyMonths === null) {
+    return `<button type="button" id="${prefix}MonthBtn" style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;background:none;border:none;padding:0;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px">${displayLabel} &#x25BE;</button>`;
+  }
+  const curSel = !currentPeriod ? ' selected' : '';
+  const opts = historyMonths.map(m => {
+    const lbl = formatMonthYear(m.year, m.month);
+    const sel = currentPeriod && currentPeriod.year === m.year && currentPeriod.month === m.month ? ' selected' : '';
+    return `<option value="${m.year}-${m.month}"${sel}>${lbl}</option>`;
+  }).join('');
+  return `<select id="${prefix}MonthSelect" style="font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#555;background:#f8f8f8;border:1px solid #ddd;border-radius:3px;padding:1px 4px;cursor:pointer"><option value="current"${curSel}>${currentLabel} (current)</option>${opts}</select>`;
 }
 
 function renderBucketLoadingPopup(payload) {
@@ -2025,7 +2192,10 @@ function renderBucketLoadingPopup(payload) {
     return '<b>Bucket Loading</b><div>No data.</div>';
   }
 
-  const monthLabel = getCurrentInventoryMonthLabel();
+  const monthLabel = bucketCurrentPeriod
+    ? formatMonthYear(bucketCurrentPeriod.year, bucketCurrentPeriod.month)
+    : getCurrentInventoryMonthLabel();
+  const monthSelectorHtml = buildMonthSelectorHtml('bucket', bucketCurrentPeriod, bucketHistoryMonths);
 
   const t = payload.totals || {};
   const totalPoundsText = (typeof t.totalPounds === 'number' && isFinite(t.totalPounds)) ? fmtInt(t.totalPounds) : '—';
@@ -2050,7 +2220,7 @@ function renderBucketLoadingPopup(payload) {
   `).join('');
 
   const body = `
-  <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
+  <div style="margin-bottom:4px">${monthSelectorHtml}</div>
   <div style="font-weight:700;margin-bottom:6px">Bucket Loading</div>
   <div style="margin-bottom:8px;text-align:center">
     <table style="width:auto;font-size:12px;line-height:1.3;border-collapse:collapse;margin:0 auto;text-align:left">
@@ -2085,7 +2255,10 @@ function renderReceivingPopup(payload) {
     return '<b>Truck Scales</b><div>No data.</div>';
   }
 
-  const monthLabel = getCurrentInventoryMonthLabel();
+  const monthLabel = receivingCurrentPeriod
+    ? formatMonthYear(receivingCurrentPeriod.year, receivingCurrentPeriod.month)
+    : getCurrentInventoryMonthLabel();
+  const monthSelectorHtml = buildMonthSelectorHtml('receiving', receivingCurrentPeriod, receivingHistoryMonths);
 
   const t = payload.totals || {};
   const totalTrucksText = (typeof t.totalTrucks === 'number' && isFinite(t.totalTrucks)) ? fmtInt(t.totalTrucks) : '—';
@@ -2111,7 +2284,7 @@ function renderReceivingPopup(payload) {
   `).join('');
 
   const body = `
-  <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
+  <div style="margin-bottom:4px">${monthSelectorHtml}</div>
   <div style="font-weight:700;margin-bottom:6px">Truck Scales</div>
   <div style="margin-bottom:8px;text-align:center">
     <table style="width:auto;font-size:12px;line-height:1.3;border-collapse:collapse;margin:0 auto;text-align:left">
@@ -2141,7 +2314,182 @@ function renderReceivingPopup(payload) {
   return `<div style="${POPUP_CONTAINER_STYLE}">${body}</div>`;
 }
 
+function showRailcarPhoto(railcarNum, monthFolder) {
+  if (!railcarPhotoOverlay) {
+    const overlay = document.createElement('div');
+    overlay.id = 'railcar-photo-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.82);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer';
+    overlay.innerHTML = '<img id="railcar-photo-img" style="max-width:90vw;max-height:80vh;object-fit:contain;box-shadow:0 4px 32px rgba(0,0,0,0.7);border-radius:4px">'
+      + '<div id="railcar-photo-caption" style="color:#fff;margin-top:10px;font-size:14px;font-family:sans-serif;text-align:center"></div>'
+      + '<div style="color:#aaa;font-size:12px;margin-top:4px;font-family:sans-serif">Click anywhere or press ESC to close</div>';
+    overlay.addEventListener('click', () => { overlay.style.display = 'none'; });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') overlay.style.display = 'none'; });
+    document.body.appendChild(overlay);
+    railcarPhotoOverlay = overlay;
+  }
+
+  const img = railcarPhotoOverlay.querySelector('#railcar-photo-img');
+  const caption = railcarPhotoOverlay.querySelector('#railcar-photo-caption');
+  img.src = '';
+  caption.textContent = 'Loading…';
+  railcarPhotoOverlay.style.display = 'flex';
+
+  function tryNext(i) {
+    const exts = ['png', 'jpg', 'jpeg'];
+    if (i >= exts.length) {
+      img.src = '';
+      caption.textContent = 'No photo found for ' + railcarNum;
+      return;
+    }
+    const url = 'RailcarPhotos/' + monthFolder + '/' + railcarNum + '.' + exts[i];
+    const test = new Image();
+    test.onload = () => { img.src = url; caption.textContent = railcarNum + ' — ' + monthFolder; };
+    test.onerror = () => tryNext(i + 1);
+    test.src = url;
+  }
+  tryNext(0);
+}
+
+function renderRailcarPopup(payload) {
+  if (!payload) {
+    return '<b>Railcar Receiving</b><div>No data.</div>';
+  }
+
+  const active = payload.active || [];
+  const released = payload.released || [];
+  const total = Array.isArray(payload.railcars) ? payload.railcars.length : 0;
+
+  const parseWeight = s => {
+    if (!s) return NaN;
+    const n = Number(String(s).replace(/,/g, '').trim());
+    return Number.isFinite(n) ? n : NaN;
+  };
+  const fmtW = s => {
+    const n = parseWeight(s);
+    return Number.isFinite(n) ? fmtInt(n) : (s || '—');
+  };
+  const computeOurNet = car => {
+    const g = parseWeight(car.ourGross);
+    const t = parseWeight(car.ourTare);
+    if (Number.isFinite(g) && Number.isFinite(t)) return fmtInt(g - t);
+    return '—';
+  };
+
+  const fmtSupplier = car => {
+    const line1 = esc(car.supplier || '—');
+    if (!car.mainSupplier) return line1;
+    return line1 + '<br><span style="font-size:11px;color:#777">' + esc(car.mainSupplier) + '</span>';
+  };
+
+  const fmtMaterial = car => {
+    const line1 = esc(car.material || '—');
+    const extras = [car.regrade, car.consistency].filter(Boolean).map(esc).join(' · ');
+    if (!extras) return line1;
+    return line1 + '<br><span style="font-size:11px;color:#777">' + extras + '</span>';
+  };
+
+  const monthFolder = getCurrentInventoryMonthLabel();
+
+  const activeHtml = active.length > 0
+    ? '<table style="width:100%;font-size:12px;border-collapse:collapse">'
+      + '<thead><tr style="background:#fff3e0">'
+      + '<th style="text-align:left;padding:2px 6px">Car #</th>'
+      + '<th style="text-align:left;padding:2px 6px">PO #</th>'
+      + '<th style="text-align:left;padding:2px 6px">Supplier</th>'
+      + '<th style="text-align:left;padding:2px 6px">Material</th>'
+      + '<th style="text-align:right;padding:2px 6px">Shipper Net</th>'
+      + '</tr></thead><tbody>'
+      + active.map(car =>
+          '<tr style="border-top:1px solid #f5f5f5">'
+          + '<td style="padding:2px 6px;font-weight:600"><button type="button" class="railcar-photo-btn" data-car="' + esc(car.railcarNum) + '" data-month="' + esc(monthFolder) + '" style="background:none;border:none;padding:0;cursor:pointer;font-weight:600;color:#0b57d0;text-decoration:underline;font-size:inherit">' + esc(car.railcarNum) + '</button></td>'
+          + '<td style="padding:2px 6px;color:#555">' + esc(car.po || '—') + '</td>'
+          + '<td style="padding:2px 6px">' + fmtSupplier(car) + '</td>'
+          + '<td style="padding:2px 6px">' + fmtMaterial(car) + '</td>'
+          + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperNet) + '</td>'
+          + '</tr>'
+        ).join('')
+      + '</tbody></table>'
+    : '<div style="font-size:12px;color:#888;padding:6px 0">No active railcars.</div>';
+
+  const releasedHtml = released.length > 0
+    ? '<table style="width:100%;font-size:12px;border-collapse:collapse">'
+      + '<thead><tr style="background:#e8f5e9">'
+      + '<th style="text-align:left;padding:2px 6px">Car #</th>'
+      + '<th style="text-align:left;padding:2px 6px">Supplier</th>'
+      + '<th style="text-align:left;padding:2px 6px">Material</th>'
+      + '<th style="text-align:right;padding:2px 6px">Our Net (lbs)</th>'
+      + '<th style="text-align:left;padding:2px 6px">Pile</th>'
+      + '<th style="text-align:left;padding:2px 6px">Status</th>'
+      + '</tr></thead><tbody>'
+      + released.map(car =>
+          '<tr style="border-top:1px solid #f5f5f5">'
+          + '<td style="padding:2px 6px;font-weight:600"><button type="button" class="railcar-photo-btn" data-car="' + esc(car.railcarNum) + '" data-month="' + esc(monthFolder) + '" style="background:none;border:none;padding:0;cursor:pointer;font-weight:600;color:#0b57d0;text-decoration:underline;font-size:inherit">' + esc(car.railcarNum) + '</button></td>'
+          + '<td style="padding:2px 6px">' + fmtSupplier(car) + '</td>'
+          + '<td style="padding:2px 6px">' + fmtMaterial(car) + '</td>'
+          + '<td style="padding:2px 6px;text-align:right">' + computeOurNet(car) + '</td>'
+          + '<td style="padding:2px 6px">' + esc(car.pile || '—') + '</td>'
+          + '<td style="padding:2px 6px">' + esc(car.status || '—') + '</td>'
+          + '</tr>'
+        ).join('')
+      + '</tbody></table>'
+    : '<div style="font-size:12px;color:#888;padding:6px 0">No released railcars.</div>';
+
+  const monthLabel = monthFolder;
+
+  const body = `
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
+    <div style="font-weight:700;margin-bottom:6px">Railroad</div>
+    <div style="margin-bottom:8px;text-align:center">
+      <table style="width:auto;font-size:12px;line-height:1.3;border-collapse:collapse;margin:0 auto;text-align:left">
+        <tr><td style="color:#666;padding:2px 6px">Total Railcars</td><td style="text-align:right;padding:2px 6px"><b>${total}</b></td></tr>
+        <tr><td style="color:#e65100;padding:2px 6px">&#9679; Active (In Yard)</td><td style="text-align:right;padding:2px 6px"><b>${active.length}</b></td></tr>
+        <tr><td style="color:#2e7d32;padding:2px 6px">&#9679; Released</td><td style="text-align:right;padding:2px 6px"><b>${released.length}</b></td></tr>
+      </table>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <button type="button" id="railcarOnsiteToggle" style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f8f8f8;cursor:pointer">Railcars Onsite (${active.length})</button>
+      <button type="button" id="railcarReleasedToggle" style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f8f8f8;cursor:pointer">Released Railcars (${released.length})</button>
+    </div>
+    <div id="railcarOnsiteSection" style="display:none;margin-top:6px">
+      <div style="font-size:11px;font-weight:700;color:#e65100;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.06em">Railcars Onsite (${active.length})</div>
+      <div style="max-height:220px;overflow-y:auto;border:1px solid #ffe0b2;border-radius:3px">
+        ${activeHtml}
+      </div>
+    </div>
+    <div id="railcarReleasedSection" style="display:none;margin-top:6px">
+      <div style="font-size:11px;font-weight:700;color:#2e7d32;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.06em">Released Railcars (${released.length})</div>
+      <div style="max-height:260px;overflow-y:auto;border:1px solid #c8e6c9;border-radius:3px">
+        ${releasedHtml}
+      </div>
+    </div>
+  `;
+
+  return `<div style="min-width:500px;max-width:100%;width:auto">${body}</div>`;
+}
+
 function wireBucketLoadingPopupEvents(container, marker) {
+  const monthBtn = container.querySelector('#bucketMonthBtn');
+  if (monthBtn) {
+    monthBtn.addEventListener('click', async () => {
+      monthBtn.textContent = 'Loading…';
+      monthBtn.disabled = true;
+      if (!bucketHistoryMonths) bucketHistoryMonths = await discoverHistoryMonths('Consumption1');
+      const payload = await fetchBucketLoadingConsumption(false, bucketCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderBucketLoadingPopup(payload)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBucketLoadingPopupEvents(el, marker); }, 0);
+    });
+  }
+  const monthSelect = container.querySelector('#bucketMonthSelect');
+  if (monthSelect) {
+    monthSelect.addEventListener('change', async () => {
+      const val = monthSelect.value;
+      bucketCurrentPeriod = val === 'current' ? null : { year: +val.split('-')[0], month: +val.split('-')[1] };
+      const payload = await fetchBucketLoadingConsumption(false, bucketCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderBucketLoadingPopup(payload)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBucketLoadingPopupEvents(el, marker); }, 0);
+    });
+  }
+
   const toggle = container.querySelector('#bucketLoadingToggle');
   const block = container.querySelector('#bucketLoadingActivity');
 
@@ -2384,6 +2732,28 @@ function wireBucketLoadingPopupEvents(container, marker) {
 }
 
 function wireReceivingPopupEvents(container, marker) {
+  const monthBtn = container.querySelector('#receivingMonthBtn');
+  if (monthBtn) {
+    monthBtn.addEventListener('click', async () => {
+      monthBtn.textContent = 'Loading…';
+      monthBtn.disabled = true;
+      if (!receivingHistoryMonths) receivingHistoryMonths = await discoverHistoryMonths('Receiving1');
+      const payload = await fetchReceivingSummary(false, receivingCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderReceivingPopup(payload)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireReceivingPopupEvents(el, marker); }, 0);
+    });
+  }
+  const monthSelect = container.querySelector('#receivingMonthSelect');
+  if (monthSelect) {
+    monthSelect.addEventListener('change', async () => {
+      const val = monthSelect.value;
+      receivingCurrentPeriod = val === 'current' ? null : { year: +val.split('-')[0], month: +val.split('-')[1] };
+      const payload = await fetchReceivingSummary(false, receivingCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderReceivingPopup(payload)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireReceivingPopupEvents(el, marker); }, 0);
+    });
+  }
+
   const toggle = container.querySelector('#receivingToggle');
   const block = container.querySelector('#receivingActivity');
 
@@ -2521,26 +2891,96 @@ function wireReceivingPopupEvents(container, marker) {
                   <th style="text-align:left;padding:2px 6px">Ticket ID</th>
                   <th style="text-align:left;padding:2px 6px">Pile</th>
                   <th style="text-align:left;padding:2px 6px">Material</th>
+                  <th style="padding:2px 6px;width:52px"></th>
                 </tr>
               </thead>
               <tbody>
-                ${truckRows.map(item => `
-                  <tr style="${item.isStoppedPile ? 'background:#ffebee;' : ''}">
-                    <td style="padding:2px 6px;${item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : ''}">${esc(item.truckNumber || '—')}</td>
-                    <td style="padding:2px 6px;${item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : ''}">${esc(item.ticketId || '—')}</td>
-                    <td style="padding:2px 6px;${item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : ''}">${esc(item.pile || '—')}</td>
-                    <td style="padding:2px 6px;${item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : ''}">${esc(item.material || '')}</td>
-                  </tr>
-                `).join('')}
+                ${truckRows.map((item, idx) => {
+                  const hasRemarks = !!(item.remarks && item.remarks.length > 0);
+                  const hasWeights = !!(item.gross || item.tare || item.net);
+                  const rowStyle = item.isStoppedPile ? 'background:#ffebee;' : '';
+                  const cellStyle = 'padding:2px 6px;' + (item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : '');
+                  const infoId = 'tki-' + idx;
+                  let rows = '<tr style="' + rowStyle + '">'
+                    + '<td style="' + cellStyle + '">' + esc(item.truckNumber || '—') + '</td>'
+                    + '<td style="' + cellStyle + '">' + esc(item.ticketId || '—') + '</td>'
+                    + '<td style="' + cellStyle + '">' + esc(item.pile || '—') + '</td>'
+                    + '<td style="' + cellStyle + '">' + esc(item.material || '') + '</td>'
+                    + '<td style="padding:2px 4px;white-space:nowrap;text-align:center">'
+                    + (hasRemarks ? '<button type="button" class="truck-info-btn" data-target="' + infoId + '-r" title="View remarks" style="border:none;background:none;cursor:pointer;font-size:14px;padding:1px 2px;line-height:1">💬</button>' : '<span style="display:inline-block;font-size:14px;padding:1px 2px;line-height:1;visibility:hidden">💬</span>')
+                    + (hasWeights ? '<button type="button" class="truck-info-btn" data-target="' + infoId + '-w" title="View weights" style="border:none;background:none;cursor:pointer;font-size:14px;padding:1px 2px;line-height:1">⚖️</button>' : '<span style="display:inline-block;font-size:14px;padding:1px 2px;line-height:1;visibility:hidden">⚖️</span>')
+                    + '</td>'
+                    + '</tr>';
+                  if (hasRemarks) {
+                    rows += '<tr id="' + infoId + '-r" class="truck-info-detail" style="display:none">'
+                      + '<td colspan="5" style="padding:2px 8px 5px 24px">'
+                      + '<div style="background:#fffde7;border-left:3px solid #f9a825;padding:4px 8px;border-radius:2px;font-size:11px;color:#555;white-space:pre-wrap">' + esc(item.remarks) + '</div>'
+                      + '</td></tr>';
+                  }
+                  if (hasWeights) {
+                    rows += '<tr id="' + infoId + '-w" class="truck-info-detail" style="display:none">'
+                      + '<td colspan="5" style="padding:2px 8px 5px 24px">'
+                      + '<div style="background:#e8f5e9;border-left:3px solid #43a047;padding:4px 8px;border-radius:2px;font-size:11px;color:#333">'
+                      + '<strong>Gross:</strong> ' + esc(item.gross || '—') + '&nbsp;&nbsp;<strong>Tare:</strong> ' + esc(item.tare || '—') + '&nbsp;&nbsp;<strong>Net:</strong> ' + esc(item.net || '—')
+                      + '</div></td></tr>';
+                  }
+                  return rows;
+                }).join('')}
               </tbody>
             </table>
           `
           : `<div style="font-size:12px;color:#666">No Receiving3 detail for ${esc(dayRow.dateLabel)}.</div>`;
 
         detailCell.innerHTML = detailHtml;
+
+        detailCell.querySelectorAll('.truck-info-btn').forEach(btn => {
+          btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const targetId = btn.getAttribute('data-target');
+            const targetRow = detailCell.querySelector('#' + targetId);
+            if (!targetRow) return;
+            const isOpen = targetRow.style.display !== 'none';
+            detailCell.querySelectorAll('.truck-info-detail').forEach(r => { r.style.display = 'none'; });
+            if (!isOpen) targetRow.style.display = '';
+          });
+        });
       });
     });
   }
+}
+
+function wireRailcarPopupEvents(container, marker) {
+  const pairs = [
+    { btn: container.querySelector('#railcarOnsiteToggle'),  section: container.querySelector('#railcarOnsiteSection') },
+    { btn: container.querySelector('#railcarReleasedToggle'), section: container.querySelector('#railcarReleasedSection') }
+  ];
+
+  function closePanel(p) {
+    if (!p.btn || !p.section) return;
+    p.section.style.display = 'none';
+    p.btn.textContent = p.btn.textContent.replace(/^Hide\s/, '');
+  }
+
+  pairs.forEach(active => {
+    if (!active.btn || !active.section) return;
+    active.btn.addEventListener('click', () => {
+      const isOpen = active.section.style.display !== 'none';
+      if (!isOpen) pairs.forEach(other => { if (other !== active) closePanel(other); });
+      active.section.style.display = isOpen ? 'none' : '';
+      active.btn.textContent = isOpen
+        ? active.btn.textContent.replace(/^Hide\s/, '')
+        : 'Hide ' + active.btn.textContent;
+    });
+  });
+
+  container.querySelectorAll('.railcar-photo-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const car = btn.getAttribute('data-car');
+      const month = btn.getAttribute('data-month');
+      if (car) showRailcarPhoto(car, month);
+    });
+  });
 }
 
 function wireBreakingPopupEvents(container, marker) {
@@ -2802,6 +3242,7 @@ const burningArea = L.circleMarker(burningLatLng, {
 window.burningArea = burningArea;
 
 burningArea.bindPopup('', { maxWidth: 420, autopan: false });
+burningArea.bindTooltip('Burning Station', { permanent: false, direction: 'top' });
 
 burningArea.on('popupopen', async () => {
   burningArea.setPopupContent(`&lt;div style="${POPUP_CONTAINER_STYLE}"&gt;Loading…&lt;/div&gt;`);
@@ -2832,6 +3273,7 @@ const breakingArea = L.circleMarker(breakingLatLng, {
 window.breakingArea = breakingArea;
 
 breakingArea.bindPopup('', { maxWidth: 420, autopan: false });
+breakingArea.bindTooltip('Breaking Pit', { permanent: false, direction: 'top' });
 
 breakingArea.on('popupopen', async () => {
   breakingArea.setPopupContent(`<div style="${POPUP_CONTAINER_STYLE}">Loading…</div>`);
@@ -2861,11 +3303,12 @@ const bucketLoadingArea = L.circleMarker(bucketLoadingLatLng, {
 window.bucketLoadingArea = bucketLoadingArea;
 
 bucketLoadingArea.bindPopup('', { maxWidth: 420, autopan: false });
+bucketLoadingArea.bindTooltip('Bucket Loading', { permanent: false, direction: 'top' });
 
 bucketLoadingArea.on('popupopen', async () => {
   bucketLoadingArea.setPopupContent(`<div style="${POPUP_CONTAINER_STYLE}">Loading…</div>`);
   try {
-    const payload = await fetchBucketLoadingConsumption();
+    const payload = await fetchBucketLoadingConsumption(false, bucketCurrentPeriod);
     const encoded = renderBucketLoadingPopup(payload);
     const decoded = unescapeAngles(encoded);
     bucketLoadingArea.setPopupContent(decoded);
@@ -2890,11 +3333,12 @@ const receivingArea = L.circleMarker(receivingLatLng, {
 window.receivingArea = receivingArea;
 
 receivingArea.bindPopup('', { maxWidth: 420, autopan: false });
+receivingArea.bindTooltip('Truck Scales', { permanent: false, direction: 'top' });
 
 receivingArea.on('popupopen', async () => {
   receivingArea.setPopupContent(`<div style="${POPUP_CONTAINER_STYLE}">Loading…</div>`);
   try {
-    const payload = await fetchReceivingSummary();
+    const payload = await fetchReceivingSummary(false, receivingCurrentPeriod);
     const encoded = renderReceivingPopup(payload);
     const decoded = unescapeAngles(encoded);
     receivingArea.setPopupContent(decoded);
@@ -2908,6 +3352,40 @@ receivingArea.on('popupopen', async () => {
     receivingArea.setPopupContent('<b>Truck Scales</b><div style="color:#c00">Failed to load Receiving1 sheet.</div>');
   }
 });
+
+/* ===================================================================
+ RAILCAR RECEIVING PANEL
+=================================================================== */
+const railcarArea = L.circleMarker(railcarLatLng, {
+  radius: 18,
+  color: 'rgba(255,255,0,0.01)',
+  fillColor: 'rgba(0,0,0,0.01)',
+  fillOpacity: 0.01,
+  weight: 12
+}).addTo(map);
+window.railcarArea = railcarArea;
+
+railcarArea.bindPopup('', { maxWidth: 600, autopan: false });
+railcarArea.bindTooltip('Railcar Receiving', { permanent: false, direction: 'top' });
+
+railcarArea.on('popupopen', async () => {
+  railcarArea.setPopupContent(`<div style="min-width:500px">Loading…</div>`);
+  try {
+    const payload = await fetchRailcarSummary();
+    const encoded = renderRailcarPopup(payload);
+    const decoded = unescapeAngles(encoded);
+    railcarArea.setPopupContent(decoded);
+
+    setTimeout(() => {
+      const el = railcarArea.getPopup()?.getElement();
+      if (el) wireRailcarPopupEvents(el, railcarArea);
+    }, 0);
+  } catch (err) {
+    console.error(err);
+    railcarArea.setPopupContent('<b>Railcar Receiving</b><div style="color:#c00">Failed to load Railcars sheet.</div>');
+  }
+});
+
 /* ===================================================================
  LOAD MARKERS + ENRICH POPUPS
 =================================================================== */
