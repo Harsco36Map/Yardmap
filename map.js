@@ -280,12 +280,15 @@ let receivingHistoryMonths = null;
 let bucketHistoryMonths = null;
 let burningHistoryMonths = null;
 let breakingHistoryMonths = null;
+let railcarHistoryMonths = null;
 let receivingCurrentPeriod = null;
 let bucketCurrentPeriod = null;
 let burningCurrentPeriod = null;
 let breakingCurrentPeriod = null;
+let railcarCurrentPeriod = null;
 const burningHistoryCache = {};
 const breakingHistoryCache = {};
+const railcarHistoryCache = {};
 let railcarPhotoOverlay = null;
 let latestInventoryPeriod = { year: null, month: null };
 
@@ -2191,14 +2194,21 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
   return payload;
 }
 
-async function fetchRailcarSummary(force = false) {
+async function fetchRailcarSummary(force = false, periodOverride = null) {
   const now = Date.now();
-  if (!force && railcarCache.data && (now - railcarCache.at) < 120000) {
-    return railcarCache.data;
+  if (periodOverride) {
+    const key = `${periodOverride.year}-${periodOverride.month}`;
+    if (!force && railcarHistoryCache[key]) {
+      return railcarHistoryCache[key];
+    }
+  } else {
+    if (!force && railcarCache.data && (now - railcarCache.at) < 120000) {
+      return railcarCache.data;
+    }
   }
 
-  const workbook = await loadTotalsWorkbook(force);
-  const sheet = findSheetByName(workbook, 'Railcars');
+  const workbook = periodOverride ? await loadHistoryWorkbook(force) : await loadTotalsWorkbook(force);
+  const sheet = findSheetByName(workbook, historySheetName('Railcars', periodOverride));
   if (!sheet) {
     console.warn('Railcars sheet not found');
     return null;
@@ -2251,7 +2261,12 @@ async function fetchRailcarSummary(force = false) {
   const released = railcars.filter(c => !!c.status);
 
   const payload = { railcars, active, released };
-  railcarCache = { at: now, data: payload };
+  if (periodOverride) {
+    const key = `${periodOverride.year}-${periodOverride.month}`;
+    railcarHistoryCache[key] = payload;
+  } else {
+    railcarCache = { at: now, data: payload };
+  }
   return payload;
 }
 
@@ -2516,6 +2531,10 @@ function renderRailcarPopup(payload) {
   };
 
   const monthFolder = getCurrentInventoryMonthLabel();
+  const monthLabel = railcarCurrentPeriod
+    ? formatMonthYear(railcarCurrentPeriod.year, railcarCurrentPeriod.month)
+    : getCurrentInventoryMonthLabel();
+  const monthSelectorHtml = buildMonthSelectorHtml('railcar', railcarCurrentPeriod, railcarHistoryMonths);
 
   const activeHtml = active.length > 0
     ? '<table style="width:100%;font-size:12px;border-collapse:collapse">'
@@ -2602,8 +2621,6 @@ function renderRailcarPopup(payload) {
       + '</tbody></table>'
     : '<div style="font-size:12px;color:#888;padding:6px 0">No released railcars.</div>';
 
-  const monthLabel = monthFolder;
-
   const railNetTotal = released.reduce((sum, car) => {
     const g = parseWeight(car.ourGross);
     const t = parseWeight(car.ourTare);
@@ -2614,7 +2631,7 @@ function renderRailcarPopup(payload) {
     : '—';
 
   const body = `
-    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
+    <div style="margin-bottom:4px">${monthSelectorHtml}</div>
     <div style="font-weight:700;margin-bottom:6px">Railroad</div>
     <div style="margin-bottom:8px;text-align:center">
       <table style="width:auto;font-size:12px;line-height:1.3;border-collapse:collapse;margin:0 auto;text-align:left">
@@ -3166,6 +3183,47 @@ function wireReceivingPopupEvents(container, marker) {
 }
 
 function wireRailcarPopupEvents(container, marker) {
+  const railcarMonthBtn = container.querySelector('#railcarMonthBtn');
+  if (railcarMonthBtn) {
+    railcarMonthBtn.addEventListener('click', async (e) => {
+      e.stopPropagation(); e.preventDefault();
+      railcarMonthBtn.textContent = 'Loading…';
+      railcarMonthBtn.disabled = true;
+      if (!railcarHistoryMonths) railcarHistoryMonths = await discoverHistoryMonths('Railcars');
+      const payload = await fetchRailcarSummary(false, railcarCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderRailcarPopup(payload)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireRailcarPopupEvents(el, marker); }, 0);
+    });
+  }
+  const railcarCalToggle = container.querySelector('#railcarMonthCalendarToggle');
+  if (railcarCalToggle) {
+    railcarCalToggle.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const cal = container.querySelector('#railcarMonthCalendar');
+      if (cal) cal.style.display = cal.style.display === 'none' ? '' : 'none';
+    });
+  }
+  container.querySelectorAll('.railcarMonthCell').forEach(cell => {
+    cell.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const val = cell.getAttribute('data-value');
+      railcarCurrentPeriod = val === 'current' ? null : { year: +val.split('-')[0], month: +val.split('-')[1] };
+      const payload = await fetchRailcarSummary(false, railcarCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderRailcarPopup(payload)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireRailcarPopupEvents(el, marker); }, 0);
+    });
+  });
+  const railcarResetBtn = container.querySelector('#railcarMonthResetBtn');
+  if (railcarResetBtn) {
+    railcarResetBtn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      railcarCurrentPeriod = null;
+      const payload = await fetchRailcarSummary(false, null);
+      marker.setPopupContent(unescapeAngles(renderRailcarPopup(payload)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireRailcarPopupEvents(el, marker); }, 0);
+    });
+  }
+
   const pairs = [
     { btn: container.querySelector('#railcarOnsiteToggle'),  section: container.querySelector('#railcarOnsiteSection') },
     { btn: container.querySelector('#railcarReleasedToggle'), section: container.querySelector('#railcarReleasedSection') }
@@ -3690,7 +3748,8 @@ railcarArea.bindTooltip('Railroad', { permanent: false, direction: 'top' });
 railcarArea.on('popupopen', async () => {
   railcarArea.setPopupContent(`<div style="min-width:500px">Loading…</div>`);
   try {
-    const payload = await fetchRailcarSummary();
+    if (!railcarHistoryMonths) railcarHistoryMonths = await discoverHistoryMonths('Railcars');
+    const payload = await fetchRailcarSummary(false, railcarCurrentPeriod);
     const encoded = renderRailcarPopup(payload);
     const decoded = unescapeAngles(encoded);
     railcarArea.setPopupContent(decoded);
