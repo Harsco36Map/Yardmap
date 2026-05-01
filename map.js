@@ -10,9 +10,11 @@ var map = L.map('map', {
     maxZoom: 21,
     wheelPxPerZoomLevel: 100,
     zoomSnap: 0,
-    zoomDelta: 0.25
+    zoomDelta: 0.25,
+    zoomControl: false
 });
 map.doubleClickZoom.disable();
+
 L.imageOverlay('Scrapyard.png', [
   [40.79156379934851, -82.54114438096362],
   [40.79571031220616, -82.5323681932691]
@@ -276,8 +278,14 @@ const receivingHistoryCache = {};
 const bucketHistoryCache = {};
 let receivingHistoryMonths = null;
 let bucketHistoryMonths = null;
+let burningHistoryMonths = null;
+let breakingHistoryMonths = null;
 let receivingCurrentPeriod = null;
 let bucketCurrentPeriod = null;
+let burningCurrentPeriod = null;
+let breakingCurrentPeriod = null;
+const burningHistoryCache = {};
+const breakingHistoryCache = {};
 let railcarPhotoOverlay = null;
 let latestInventoryPeriod = { year: null, month: null };
 
@@ -502,22 +510,21 @@ function formatMonthYear(year, month) {
   return (names[month] || 'Month') + ' ' + year;
 }
 
-async function discoverHistoryMonths(sheetName) {
+async function discoverHistoryMonths(baseSheetType) {
+  // History.xlsx uses sheet names like "1-2026Receiving1" or "3-2026Consumption1".
+  // Discover available months by matching that pattern instead of scanning row data.
   try {
     const workbook = await loadHistoryWorkbook();
-    const sheet = findSheetByName(workbook, sheetName);
-    if (!sheet) return [];
-    const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+    if (!workbook || !Array.isArray(workbook.SheetNames)) return [];
+    const pattern = new RegExp(`^(\\d{1,2})-(\\d{4})${baseSheetType}$`, 'i');
     const seen = new Map();
-    for (let i = 1; i < data.length; i++) {
-      const row = Array.isArray(data[i]) ? data[i] : [];
-      for (let c = 0; c < Math.min(row.length, 6); c++) {
-        const parsed = parseXlsxDateCell(row[c]);
-        if (parsed && !isNaN(parsed.getTime())) {
-          const key = `${parsed.getFullYear()}-${parsed.getMonth()}`;
-          if (!seen.has(key)) seen.set(key, { year: parsed.getFullYear(), month: parsed.getMonth() });
-          break;
-        }
+    for (const name of workbook.SheetNames) {
+      const m = name.trim().match(pattern);
+      if (m) {
+        const month = parseInt(m[1], 10) - 1; // convert to 0-indexed
+        const year = parseInt(m[2], 10);
+        const key = `${year}-${month}`;
+        if (!seen.has(key)) seen.set(key, { year, month });
       }
     }
     return Array.from(seen.values()).sort((a, b) => b.year - a.year || b.month - a.month);
@@ -525,6 +532,56 @@ async function discoverHistoryMonths(sheetName) {
     console.warn('discoverHistoryMonths failed:', err);
     return [];
   }
+}
+
+// Discovers months for panels whose history lives in year-named sheets (e.g. "2026BurningHistory").
+// Each sheet stores months as horizontal blocks that each have their own "Date" header column.
+// We find those header columns and sample one date per block — avoids false positives from
+// weight/quantity values in other columns.
+async function discoverHistoryMonthsForYearlySheet(basePattern) {
+  try {
+    const workbook = await loadHistoryWorkbook();
+    if (!workbook || !Array.isArray(workbook.SheetNames)) return [];
+    const pat = new RegExp(`^\\d{4}${basePattern}$`, 'i');
+    const seen = new Map();
+    for (const shName of workbook.SheetNames) {
+      if (!pat.test(shName.trim())) continue;
+      const sheet = workbook.Sheets[shName];
+      if (!sheet) continue;
+      const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+      if (!Array.isArray(data) || data.length < 2) continue;
+
+      // Find every column whose header is exactly "date" — one per horizontal month block.
+      const headers = (Array.isArray(data[0]) ? data[0] : []).map(h => String(h || '').trim().toLowerCase());
+      const dateCols = [];
+      headers.forEach((h, i) => { if (h === 'date') dateCols.push(i); });
+      if (dateCols.length === 0) dateCols.push(0); // fallback: first column
+
+      // For each date column, take the first valid date found — that identifies the month.
+      for (const col of dateCols) {
+        for (let r = 1; r < data.length; r++) {
+          const row = Array.isArray(data[r]) ? data[r] : [];
+          const parsed = parseXlsxDateCell(row[col]);
+          if (parsed && !isNaN(parsed.getTime()) && parsed.getFullYear() >= 2020) {
+            const key = `${parsed.getFullYear()}-${parsed.getMonth()}`;
+            if (!seen.has(key)) seen.set(key, { year: parsed.getFullYear(), month: parsed.getMonth() });
+            break; // one date per block is enough
+          }
+        }
+      }
+    }
+    return Array.from(seen.values()).sort((a, b) => b.year - a.year || b.month - a.month);
+  } catch (err) {
+    console.warn('discoverHistoryMonthsForYearlySheet failed:', err);
+    return [];
+  }
+}
+
+// Returns the correct sheet name for a given base type and optional period override.
+// Production.xlsx uses bare names ("Consumption1"); History.xlsx uses "1-2026Consumption1".
+function historySheetName(baseType, periodOverride) {
+  if (!periodOverride) return baseType;
+  return `${periodOverride.month + 1}-${periodOverride.year}${baseType}`;
 }
 
 // ===================== GLOBAL HELPERS (must be above builders) =====================
@@ -776,10 +833,15 @@ async function fetchLatestInventoryCsv() {
   };
 }
 
-async function fetchBurningTotals(force = false) {
+async function fetchBurningTotals(force = false, periodOverride = null) {
   const now = Date.now();
-  if (!force && burningCache.data && (now - burningCache.at) < 120000) {
-    return burningCache.data;
+  if (periodOverride) {
+    const key = `${periodOverride.year}-${periodOverride.month}`;
+    if (!force && burningHistoryCache[key]) return burningHistoryCache[key];
+  } else {
+    if (!force && burningCache.data && (now - burningCache.at) < 120000) {
+      return burningCache.data;
+    }
   }
 
   const rows = [];
@@ -788,9 +850,10 @@ async function fetchBurningTotals(force = false) {
     return Number.isFinite(x) ? x : null;
   };
 
-  const workbook = await loadTotalsWorkbook(force);
-  const sheet = findSheetByName(workbook, 'Burning');
-  if (!sheet) throw new Error('Burning sheet not found in Production.xlsx');
+  const workbook = periodOverride ? await loadHistoryWorkbook(force) : await loadTotalsWorkbook(force);
+  const sheetName = periodOverride ? `${periodOverride.year}BurningHistory` : 'Burning';
+  const sheet = findSheetByName(workbook, sheetName);
+  if (!sheet) throw new Error(`${sheetName} sheet not found`);
 
   const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
   if (!Array.isArray(data) || data.length < 2) {
@@ -858,7 +921,7 @@ async function fetchBurningTotals(force = false) {
 
   rows.sort((a, b) => b.date - a.date);
 
-  const { year: filterYear, month: filterMonth } = getCurrentInventoryPeriod();
+  const { year: filterYear, month: filterMonth } = periodOverride || getCurrentInventoryPeriod();
   const monthRows = rows.filter(r =>
     r.date.getFullYear() === filterYear && r.date.getMonth() === filterMonth
   );
@@ -887,14 +950,23 @@ async function fetchBurningTotals(force = false) {
   };
 
   window.currentBurningSheetRows = monthRows;
-  burningCache = { at: now, data: payload };
+  if (periodOverride) {
+    burningHistoryCache[`${periodOverride.year}-${periodOverride.month}`] = payload;
+  } else {
+    burningCache = { at: now, data: payload };
+  }
   return payload;
 }
 
-async function fetchBreakingTotals(force = false) {
+async function fetchBreakingTotals(force = false, periodOverride = null) {
   const now = Date.now();
-  if (!force && breakingCache.data && (now - breakingCache.at) < 120000) {
-    return breakingCache.data;
+  if (periodOverride) {
+    const key = `${periodOverride.year}-${periodOverride.month}`;
+    if (!force && breakingHistoryCache[key]) return breakingHistoryCache[key];
+  } else {
+    if (!force && breakingCache.data && (now - breakingCache.at) < 120000) {
+      return breakingCache.data;
+    }
   }
 
   const rows = [];
@@ -903,9 +975,10 @@ async function fetchBreakingTotals(force = false) {
     return Number.isFinite(x) ? x : null;
   };
 
-  const workbook = await loadTotalsWorkbook(force);
-  const sheet = findSheetByName(workbook, 'Breaking');
-  if (!sheet) throw new Error('Breaking sheet not found in Production.xlsx');
+  const workbook = periodOverride ? await loadHistoryWorkbook(force) : await loadTotalsWorkbook(force);
+  const sheetName = periodOverride ? `${periodOverride.year}BreakingHistory` : 'Breaking';
+  const sheet = findSheetByName(workbook, sheetName);
+  if (!sheet) throw new Error(`${sheetName} sheet not found`);
 
   const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
   if (!Array.isArray(data) || data.length < 2) {
@@ -970,7 +1043,7 @@ async function fetchBreakingTotals(force = false) {
 
   rows.sort((a, b) => b.date - a.date);
 
-  const { year: filterYear, month: filterMonth } = getCurrentInventoryPeriod();
+  const { year: filterYear, month: filterMonth } = periodOverride || getCurrentInventoryPeriod();
   const monthRows = rows.filter(r =>
     r.date.getFullYear() === filterYear && r.date.getMonth() === filterMonth
   );
@@ -999,7 +1072,11 @@ async function fetchBreakingTotals(force = false) {
   };
 
   window.currentBreakingSheetRows = monthRows;
-  breakingCache = { at: now, data: payload };
+  if (periodOverride) {
+    breakingHistoryCache[`${periodOverride.year}-${periodOverride.month}`] = payload;
+  } else {
+    breakingCache = { at: now, data: payload };
+  }
   return payload;
 }
 
@@ -1085,7 +1162,7 @@ function renderBreakingPopup(payload, markers, stockIndex) {
     return '<b>Breaking Pit</b><div>No data.</div>';
   }
 
-  const monthLabel = getCurrentInventoryMonthLabel();
+  const monthSelectorHtml = buildMonthSelectorHtml('breaking', breakingCurrentPeriod, breakingHistoryMonths);
 
   // --- Breaking summary (Unprep first, then Processed; no mismatched <b>) ---
 const t = payload.totals || {};
@@ -1200,7 +1277,7 @@ const activity = `
   `;
 
   const body = `
-    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
+    <div style="margin-bottom:4px">${monthSelectorHtml}</div>
     <div style="font-weight:700;margin-bottom:6px">Breaking Pit</div>
     ${summary}
     ${activity}
@@ -1214,7 +1291,7 @@ function renderBurningPopup(payload, markers, stockIndex) {
     return '&lt;b&gt;Burning Station&lt;/b&gt;&lt;div&gt;No data.&lt;/div&gt;';
   }
 
-  const monthLabel = getCurrentInventoryMonthLabel();
+  const monthSelectorHtml = buildMonthSelectorHtml('burning', burningCurrentPeriod, burningHistoryMonths);
 
   const t = payload.totals;
   const coilsRowsHtml = buildCoilsRows(markers, stockIndex);
@@ -1331,7 +1408,7 @@ const summary = `
 
 
   const body = `
-    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
+    <div style="margin-bottom:4px">${monthSelectorHtml}</div>
     &lt;div style="font-weight:700;margin-bottom:6px"&gt;Burning Station&lt;/div&gt;
     ${summary}
     ${activity}
@@ -1347,7 +1424,10 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
   const now = Date.now();
   if (periodOverride) {
     const key = `${periodOverride.year}-${periodOverride.month}`;
-    if (!force && bucketHistoryCache[key]) return bucketHistoryCache[key];
+    if (!force && bucketHistoryCache[key]) {
+      window.currentBucketLoadingRows = bucketHistoryCache[key].rows;
+      return bucketHistoryCache[key];
+    }
   } else {
     if (!force && bucketLoadingCache.data && (now - bucketLoadingCache.at) < 120000) {
       return bucketLoadingCache.data;
@@ -1373,7 +1453,7 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
   };
 
   const workbook = periodOverride ? await loadHistoryWorkbook(force) : await loadTotalsWorkbook(force);
-  const sheet = findSheetByName(workbook, 'Consumption1');
+  const sheet = findSheetByName(workbook, historySheetName('Consumption1', periodOverride));
   if (!sheet) {
     console.warn('Consumption1 sheet not found');
     return null;
@@ -1438,7 +1518,7 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
     return '';
   };
 
-  const consumption2 = findSheetByName(workbook, 'Consumption2');
+  const consumption2 = findSheetByName(workbook, historySheetName('Consumption2', periodOverride));
   if (consumption2) {
     const data2 = window.XLSX.utils.sheet_to_json(consumption2, { header: 1, raw: false });
     if (Array.isArray(data2) && data2.length >= 2) {
@@ -1536,7 +1616,7 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
 
   // ---- Consumption4: heat-level material breakdown ----
   const heatBreakdownByIsoDate = {};
-  const consumption4 = findSheetByName(workbook, 'Consumption4');
+  const consumption4 = findSheetByName(workbook, historySheetName('Consumption4', periodOverride));
   if (consumption4) {
     const data4 = window.XLSX.utils.sheet_to_json(consumption4, { header: 1, raw: false });
     if (Array.isArray(data4) && data4.length >= 2) {
@@ -1754,10 +1834,10 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
     }
   };
 
+  window.currentBucketLoadingRows = rows;
   if (periodOverride) {
     bucketHistoryCache[`${periodOverride.year}-${periodOverride.month}`] = payload;
   } else {
-    window.currentBucketLoadingRows = rows;
     bucketLoadingCache = { at: now, data: payload };
   }
   return payload;
@@ -1767,7 +1847,10 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
   const now = Date.now();
   if (periodOverride) {
     const key = `${periodOverride.year}-${periodOverride.month}`;
-    if (!force && receivingHistoryCache[key]) return receivingHistoryCache[key];
+    if (!force && receivingHistoryCache[key]) {
+      window.currentReceivingRows = receivingHistoryCache[key].rows;
+      return receivingHistoryCache[key];
+    }
   } else {
     if (!force && receivingCache.data && (now - receivingCache.at) < 120000) {
       return receivingCache.data;
@@ -1792,7 +1875,7 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
   };
 
   const workbook = periodOverride ? await loadHistoryWorkbook(force) : await loadTotalsWorkbook(force);
-  const sheet = findSheetByName(workbook, 'Receiving1');
+  const sheet = findSheetByName(workbook, historySheetName('Receiving1', periodOverride));
   if (!sheet) {
     console.warn('Receiving1 sheet not found');
     return null;
@@ -1855,7 +1938,7 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
   const hasHeaderRow = dateCol >= 0 || trucksCol >= 0 || weightCol >= 0;
 
   const breakdownByIsoDate = {};
-  const receiving2 = findSheetByName(workbook, 'Receiving2');
+  const receiving2 = findSheetByName(workbook, historySheetName('Receiving2', periodOverride));
   if (receiving2) {
     const data2 = window.XLSX.utils.sheet_to_json(receiving2, { header: 1, raw: false });
     if (Array.isArray(data2) && data2.length > 0) {
@@ -1926,7 +2009,7 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
   }
 
   const truckDetailsByIsoDate = {};
-  const receiving3 = findSheetByName(workbook, 'Receiving3');
+  const receiving3 = findSheetByName(workbook, historySheetName('Receiving3', periodOverride));
   if (receiving3) {
     const data3 = window.XLSX.utils.sheet_to_json(receiving3, { header: 1, raw: false });
     if (Array.isArray(data3) && data3.length > 0) {
@@ -2099,10 +2182,10 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
     }
   };
 
+  window.currentReceivingRows = rows;
   if (periodOverride) {
     receivingHistoryCache[`${periodOverride.year}-${periodOverride.month}`] = payload;
   } else {
-    window.currentReceivingRows = rows;
     receivingCache = { at: now, data: payload };
   }
   return payload;
@@ -2173,18 +2256,56 @@ async function fetchRailcarSummary(force = false) {
 }
 
 function buildMonthSelectorHtml(prefix, currentPeriod, historyMonths) {
+  const { year: curYear, month: curMonth } = getCurrentInventoryPeriod();
   const currentLabel = getCurrentInventoryMonthLabel();
   const displayLabel = currentPeriod ? formatMonthYear(currentPeriod.year, currentPeriod.month) : currentLabel;
+
   if (historyMonths === null) {
     return `<button type="button" id="${prefix}MonthBtn" style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;background:none;border:none;padding:0;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px">${displayLabel} &#x25BE;</button>`;
   }
-  const curSel = !currentPeriod ? ' selected' : '';
-  const opts = historyMonths.map(m => {
-    const lbl = formatMonthYear(m.year, m.month);
-    const sel = currentPeriod && currentPeriod.year === m.year && currentPeriod.month === m.month ? ' selected' : '';
-    return `<option value="${m.year}-${m.month}"${sel}>${lbl}</option>`;
+
+  const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const yearSet = new Set([curYear]);
+  historyMonths.forEach(m => yearSet.add(m.year));
+  const years = [...yearSet].sort((a, b) => a - b);
+
+  const gridsHtml = years.map(year => {
+    const cells = MONTH_SHORT.map((abbr, mIdx) => {
+      const isCurrentAndSelected = !currentPeriod && year === curYear && mIdx === curMonth;
+      const isHistorySelected = currentPeriod && currentPeriod.year === year && currentPeriod.month === mIdx;
+      const isCurrentMonth = year === curYear && mIdx === curMonth;
+      const hasHistory = historyMonths.some(m => m.year === year && m.month === mIdx);
+      const isAvailable = isCurrentMonth || hasHistory;
+
+      if (!isAvailable) {
+        return `<span style="display:block;padding:3px 0;font-size:11px;color:#ccc;text-align:center;border-radius:3px">${abbr}</span>`;
+      }
+
+      let bg = 'transparent', fw = '400', border = '1px solid transparent', color = '#0b57d0';
+      if (isCurrentAndSelected)  { bg = '#e6f4ea'; border = '1px solid #34a853'; color = '#1a6630'; fw = '700'; }
+      else if (isHistorySelected) { bg = '#e8f0fe'; border = '1px solid #4285f4'; fw = '700'; }
+      else if (isCurrentMonth)    { bg = '#f0fdf4'; }
+
+      const val = isCurrentMonth ? 'current' : `${year}-${mIdx}`;
+      return `<button type="button" class="${prefix}MonthCell" data-value="${val}" style="display:block;width:100%;padding:3px 0;font-size:11px;font-weight:${fw};color:${color};background:${bg};border:${border};border-radius:3px;cursor:pointer;text-align:center">${abbr}</button>`;
+    });
+
+    return `<div style="text-align:center;font-size:10px;font-weight:700;color:#888;letter-spacing:0.05em;margin-bottom:3px">${year}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:2px;margin-bottom:2px">${cells.join('')}</div>`;
   }).join('');
-  return `<select id="${prefix}MonthSelect" style="font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#555;background:#f8f8f8;border:1px solid #ddd;border-radius:3px;padding:1px 4px;cursor:pointer"><option value="current"${curSel}>${currentLabel} (current)</option>${opts}</select>`;
+
+  const resetBtn = currentPeriod
+    ? `<button type="button" id="${prefix}MonthResetBtn" title="Return to current month" style="font-size:15px;line-height:1;background:none;border:none;padding:0 0 0 5px;cursor:pointer;color:#1a73e8;vertical-align:middle">↺</button>`
+    : '';
+
+  return `<div style="position:relative;display:inline-block">
+      <div style="display:inline-flex;align-items:center;gap:2px">
+        <button type="button" id="${prefix}MonthCalendarToggle" style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;background:none;border:none;padding:0;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px">${displayLabel}</button>${resetBtn}
+      </div>
+      <div id="${prefix}MonthCalendar" style="display:none;position:absolute;top:calc(100% + 3px);left:0;z-index:10000;padding:6px 8px;background:#fff;border:1px solid #ddd;border-radius:4px;box-shadow:0 3px 12px rgba(0,0,0,0.2);min-width:160px">
+        ${gridsHtml}
+      </div>
+    </div>`;
 }
 
 function renderBucketLoadingPopup(payload) {
@@ -2264,7 +2385,13 @@ function renderReceivingPopup(payload) {
   const totalTrucksText = (typeof t.totalTrucks === 'number' && isFinite(t.totalTrucks)) ? fmtInt(t.totalTrucks) : '—';
   const totalWeightText = (typeof t.totalWeight === 'number' && isFinite(t.totalWeight)) ? fmtInt(t.totalWeight) : '—';
   const totalTonsText = (typeof t.totalTons === 'number' && isFinite(t.totalTons)) ? fmtTons2(t.totalTons, 2) : '—';
-  const dailyAvgWeight = (payload.rows || []).length > 0 ? (t.totalWeight / payload.rows.length) : 0;
+  const weekdayCount = (payload.rows || []).filter(r => {
+    if (!r.isoDate) return false;
+    const [yr, mo, dy] = r.isoDate.split('-').map(Number);
+    const dow = new Date(yr, mo - 1, dy).getDay();
+    return dow >= 1 && dow <= 5; // Monday–Friday only
+  }).length;
+  const dailyAvgWeight = weekdayCount > 0 ? (t.totalWeight / weekdayCount) : 0;
   const dailyAvgWeightText = Number.isFinite(dailyAvgWeight) ? fmtInt(dailyAvgWeight) : '—';
   const dailyAvgTonsText = Number.isFinite(dailyAvgWeight) ? fmtTons2(dailyAvgWeight / 2000, 2) : '—';
 
@@ -2352,7 +2479,7 @@ function showRailcarPhoto(railcarNum, monthFolder) {
 
 function renderRailcarPopup(payload) {
   if (!payload) {
-    return '<b>Railcar Receiving</b><div>No data.</div>';
+    return '<b>Railroad</b><div>No data.</div>';
   }
 
   const active = payload.active || [];
@@ -2397,17 +2524,34 @@ function renderRailcarPopup(payload) {
       + '<th style="text-align:left;padding:2px 6px">PO #</th>'
       + '<th style="text-align:left;padding:2px 6px">Supplier</th>'
       + '<th style="text-align:left;padding:2px 6px">Material</th>'
-      + '<th style="text-align:right;padding:2px 6px">Shipper Net</th>'
+      + '<th style="text-align:right;padding:2px 6px">Shpr Gross</th>'
+      + '<th style="text-align:right;padding:2px 6px">Shpr Tare</th>'
+      + '<th style="text-align:right;padding:2px 6px">Shpr Net</th>'
+      + '<th style="text-align:right;padding:2px 6px">Scale Gross</th>'
       + '</tr></thead><tbody>'
-      + active.map(car =>
-          '<tr style="border-top:1px solid #f5f5f5">'
-          + '<td style="padding:2px 6px;font-weight:600"><button type="button" class="railcar-photo-btn" data-car="' + esc(car.railcarNum) + '" data-month="' + esc(monthFolder) + '" style="background:none;border:none;padding:0;cursor:pointer;font-weight:600;color:#0b57d0;text-decoration:underline;font-size:inherit">' + esc(car.railcarNum) + '</button></td>'
-          + '<td style="padding:2px 6px;color:#555">' + esc(car.po || '—') + '</td>'
-          + '<td style="padding:2px 6px">' + fmtSupplier(car) + '</td>'
-          + '<td style="padding:2px 6px">' + fmtMaterial(car) + '</td>'
-          + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperNet) + '</td>'
-          + '</tr>'
-        ).join('')
+      + active.map(car => {
+          const hasScale = !!car.ourGross;
+          const rowStyle = 'border-top:1px solid #f5f5f5;' + (hasScale ? 'background:#e8f5e9;' : '');
+          const gOurs = parseWeight(car.ourGross);
+          const gShpr = parseWeight(car.shipperGross);
+          const grossDiff = (Number.isFinite(gOurs) && Number.isFinite(gShpr)) ? (gOurs - gShpr) : null;
+          const grossTitle = grossDiff !== null
+            ? fmtInt(Math.abs(grossDiff)) + ' lbs ' + (grossDiff > 0 ? "Higher than shipper's" : grossDiff < 0 ? "Lower than shipper's" : 'Exact match')
+            : '';
+          const scaleGrossCell = hasScale
+            ? (grossTitle ? '<span style="text-decoration:underline dotted">' + fmtW(car.ourGross) + '</span>' : fmtW(car.ourGross))
+            : '—';
+          return '<tr style="' + rowStyle + '">'
+            + '<td style="padding:2px 6px;font-weight:600"><button type="button" class="railcar-photo-btn" data-car="' + esc(car.railcarNum) + '" data-month="' + esc(monthFolder) + '" style="background:none;border:none;padding:0;cursor:pointer;font-weight:600;color:#0b57d0;text-decoration:underline;font-size:inherit">' + esc(car.railcarNum) + '</button></td>'
+            + '<td style="padding:2px 6px;color:#555">' + esc(car.po || '—') + '</td>'
+            + '<td style="padding:2px 6px">' + fmtSupplier(car) + '</td>'
+            + '<td style="padding:2px 6px">' + fmtMaterial(car) + '</td>'
+            + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperGross) + '</td>'
+            + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperTare) + '</td>'
+            + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperNet) + '</td>'
+            + '<td style="padding:2px 6px;text-align:right"' + (grossTitle ? ' data-offset="' + grossTitle + '"' : '') + '>' + scaleGrossCell + '</td>'
+            + '</tr>';
+        }).join('')
       + '</tbody></table>'
     : '<div style="font-size:12px;color:#888;padding:6px 0">No active railcars.</div>';
 
@@ -2415,26 +2559,59 @@ function renderRailcarPopup(payload) {
     ? '<table style="width:100%;font-size:12px;border-collapse:collapse">'
       + '<thead><tr style="background:#e8f5e9">'
       + '<th style="text-align:left;padding:2px 6px">Car #</th>'
+      + '<th style="text-align:left;padding:2px 6px">PO #</th>'
       + '<th style="text-align:left;padding:2px 6px">Supplier</th>'
       + '<th style="text-align:left;padding:2px 6px">Material</th>'
+      + '<th style="text-align:right;padding:2px 6px">Scale Gross</th>'
+      + '<th style="text-align:right;padding:2px 6px">Scale Tare</th>'
       + '<th style="text-align:right;padding:2px 6px">Our Net (lbs)</th>'
       + '<th style="text-align:left;padding:2px 6px">Pile</th>'
       + '<th style="text-align:left;padding:2px 6px">Status</th>'
       + '</tr></thead><tbody>'
-      + released.map(car =>
-          '<tr style="border-top:1px solid #f5f5f5">'
-          + '<td style="padding:2px 6px;font-weight:600"><button type="button" class="railcar-photo-btn" data-car="' + esc(car.railcarNum) + '" data-month="' + esc(monthFolder) + '" style="background:none;border:none;padding:0;cursor:pointer;font-weight:600;color:#0b57d0;text-decoration:underline;font-size:inherit">' + esc(car.railcarNum) + '</button></td>'
-          + '<td style="padding:2px 6px">' + fmtSupplier(car) + '</td>'
-          + '<td style="padding:2px 6px">' + fmtMaterial(car) + '</td>'
-          + '<td style="padding:2px 6px;text-align:right">' + computeOurNet(car) + '</td>'
-          + '<td style="padding:2px 6px">' + esc(car.pile || '—') + '</td>'
-          + '<td style="padding:2px 6px">' + esc(car.status || '—') + '</td>'
-          + '</tr>'
-        ).join('')
+      + released.map(car => {
+          const gOurs = parseWeight(car.ourGross);
+          const gShpr = parseWeight(car.shipperGross);
+          const grossDiff = (Number.isFinite(gOurs) && Number.isFinite(gShpr)) ? (gOurs - gShpr) : null;
+          const grossTitle = grossDiff !== null
+            ? fmtInt(Math.abs(grossDiff)) + ' lbs ' + (grossDiff > 0 ? "Higher than shipper's" : grossDiff < 0 ? "Lower than shipper's" : 'Exact match')
+            : '';
+          const scaleGrossCell = car.ourGross
+            ? (grossTitle ? '<span style="text-decoration:underline dotted">' + fmtW(car.ourGross) + '</span>' : fmtW(car.ourGross))
+            : '—';
+          const ourNetNum = parseWeight(car.ourGross) - parseWeight(car.ourTare);
+          const shprNetNum = parseWeight(car.shipperNet);
+          const netDiff = (Number.isFinite(ourNetNum) && Number.isFinite(shprNetNum)) ? (ourNetNum - shprNetNum) : null;
+          const netTitle = netDiff !== null
+            ? fmtInt(Math.abs(netDiff)) + ' lbs ' + (netDiff > 0 ? "Higher than shipper's" : netDiff < 0 ? "Lower than shipper's" : 'Exact match')
+            : '';
+          const ourNetCell = netTitle
+            ? '<span style="text-decoration:underline dotted">' + computeOurNet(car) + '</span>'
+            : computeOurNet(car);
+          return '<tr style="border-top:1px solid #f5f5f5">'
+            + '<td style="padding:2px 6px;font-weight:600"><button type="button" class="railcar-photo-btn" data-car="' + esc(car.railcarNum) + '" data-month="' + esc(monthFolder) + '" style="background:none;border:none;padding:0;cursor:pointer;font-weight:600;color:#0b57d0;text-decoration:underline;font-size:inherit">' + esc(car.railcarNum) + '</button></td>'
+            + '<td style="padding:2px 6px;color:#555">' + esc(car.po || '—') + '</td>'
+            + '<td style="padding:2px 6px">' + fmtSupplier(car) + '</td>'
+            + '<td style="padding:2px 6px">' + fmtMaterial(car) + '</td>'
+            + '<td style="padding:2px 6px;text-align:right"' + (grossTitle ? ' data-offset="' + grossTitle + '"' : '') + '>' + scaleGrossCell + '</td>'
+            + '<td style="padding:2px 6px;text-align:right">' + (car.ourTare ? fmtW(car.ourTare) : '—') + '</td>'
+            + '<td style="padding:2px 6px;text-align:right"' + (netTitle ? ' data-offset="' + netTitle + '"' : '') + '>' + ourNetCell + '</td>'
+            + '<td style="padding:2px 6px">' + esc(car.pile || '—') + '</td>'
+            + '<td style="padding:2px 6px">' + esc(car.status || '—') + '</td>'
+            + '</tr>';
+        }).join('')
       + '</tbody></table>'
     : '<div style="font-size:12px;color:#888;padding:6px 0">No released railcars.</div>';
 
   const monthLabel = monthFolder;
+
+  const railNetTotal = released.reduce((sum, car) => {
+    const g = parseWeight(car.ourGross);
+    const t = parseWeight(car.ourTare);
+    return (Number.isFinite(g) && Number.isFinite(t)) ? sum + (g - t) : sum;
+  }, 0);
+  const railNetTotalText = railNetTotal > 0
+    ? `<b>${fmtInt(railNetTotal)} lbs</b> <span style="color:#555">(<b>${fmtTons2(railNetTotal / 2000, 2)} tons</b>)</span>`
+    : '—';
 
   const body = `
     <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#666;margin-bottom:4px">${monthLabel}</div>
@@ -2444,6 +2621,7 @@ function renderRailcarPopup(payload) {
         <tr><td style="color:#666;padding:2px 6px">Total Railcars</td><td style="text-align:right;padding:2px 6px"><b>${total}</b></td></tr>
         <tr><td style="color:#e65100;padding:2px 6px">&#9679; Active (In Yard)</td><td style="text-align:right;padding:2px 6px"><b>${active.length}</b></td></tr>
         <tr><td style="color:#2e7d32;padding:2px 6px">&#9679; Released</td><td style="text-align:right;padding:2px 6px"><b>${released.length}</b></td></tr>
+        <tr><td style="color:#666;padding:2px 6px;padding-top:6px;border-top:1px solid #eee">Total Weight Received</td><td style="text-align:right;padding:2px 6px;padding-top:6px;border-top:1px solid #eee">${railNetTotalText}</td></tr>
       </table>
     </div>
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -2464,13 +2642,14 @@ function renderRailcarPopup(payload) {
     </div>
   `;
 
-  return `<div style="min-width:500px;max-width:100%;width:auto">${body}</div>`;
+  return `<div style="min-width:640px;max-width:100%;width:auto">${body}</div>`;
 }
 
 function wireBucketLoadingPopupEvents(container, marker) {
   const monthBtn = container.querySelector('#bucketMonthBtn');
   if (monthBtn) {
-    monthBtn.addEventListener('click', async () => {
+    monthBtn.addEventListener('click', async (e) => {
+      e.stopPropagation(); e.preventDefault();
       monthBtn.textContent = 'Loading…';
       monthBtn.disabled = true;
       if (!bucketHistoryMonths) bucketHistoryMonths = await discoverHistoryMonths('Consumption1');
@@ -2479,12 +2658,30 @@ function wireBucketLoadingPopupEvents(container, marker) {
       setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBucketLoadingPopupEvents(el, marker); }, 0);
     });
   }
-  const monthSelect = container.querySelector('#bucketMonthSelect');
-  if (monthSelect) {
-    monthSelect.addEventListener('change', async () => {
-      const val = monthSelect.value;
+  const calToggle = container.querySelector('#bucketMonthCalendarToggle');
+  if (calToggle) {
+    calToggle.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const cal = container.querySelector('#bucketMonthCalendar');
+      if (cal) cal.style.display = cal.style.display === 'none' ? '' : 'none';
+    });
+  }
+  container.querySelectorAll('.bucketMonthCell').forEach(cell => {
+    cell.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const val = cell.getAttribute('data-value');
       bucketCurrentPeriod = val === 'current' ? null : { year: +val.split('-')[0], month: +val.split('-')[1] };
       const payload = await fetchBucketLoadingConsumption(false, bucketCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderBucketLoadingPopup(payload)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBucketLoadingPopupEvents(el, marker); }, 0);
+    });
+  });
+  const bucketResetBtn = container.querySelector('#bucketMonthResetBtn');
+  if (bucketResetBtn) {
+    bucketResetBtn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      bucketCurrentPeriod = null;
+      const payload = await fetchBucketLoadingConsumption(false, null);
       marker.setPopupContent(unescapeAngles(renderBucketLoadingPopup(payload)));
       setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBucketLoadingPopupEvents(el, marker); }, 0);
     });
@@ -2734,7 +2931,8 @@ function wireBucketLoadingPopupEvents(container, marker) {
 function wireReceivingPopupEvents(container, marker) {
   const monthBtn = container.querySelector('#receivingMonthBtn');
   if (monthBtn) {
-    monthBtn.addEventListener('click', async () => {
+    monthBtn.addEventListener('click', async (e) => {
+      e.stopPropagation(); e.preventDefault();
       monthBtn.textContent = 'Loading…';
       monthBtn.disabled = true;
       if (!receivingHistoryMonths) receivingHistoryMonths = await discoverHistoryMonths('Receiving1');
@@ -2743,12 +2941,30 @@ function wireReceivingPopupEvents(container, marker) {
       setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireReceivingPopupEvents(el, marker); }, 0);
     });
   }
-  const monthSelect = container.querySelector('#receivingMonthSelect');
-  if (monthSelect) {
-    monthSelect.addEventListener('change', async () => {
-      const val = monthSelect.value;
+  const receivingCalToggle = container.querySelector('#receivingMonthCalendarToggle');
+  if (receivingCalToggle) {
+    receivingCalToggle.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const cal = container.querySelector('#receivingMonthCalendar');
+      if (cal) cal.style.display = cal.style.display === 'none' ? '' : 'none';
+    });
+  }
+  container.querySelectorAll('.receivingMonthCell').forEach(cell => {
+    cell.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const val = cell.getAttribute('data-value');
       receivingCurrentPeriod = val === 'current' ? null : { year: +val.split('-')[0], month: +val.split('-')[1] };
       const payload = await fetchReceivingSummary(false, receivingCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderReceivingPopup(payload)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireReceivingPopupEvents(el, marker); }, 0);
+    });
+  });
+  const receivingResetBtn = container.querySelector('#receivingMonthResetBtn');
+  if (receivingResetBtn) {
+    receivingResetBtn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      receivingCurrentPeriod = null;
+      const payload = await fetchReceivingSummary(false, null);
       marker.setPopupContent(unescapeAngles(renderReceivingPopup(payload)));
       setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireReceivingPopupEvents(el, marker); }, 0);
     });
@@ -2981,9 +3197,71 @@ function wireRailcarPopupEvents(container, marker) {
       if (car) showRailcarPhoto(car, month);
     });
   });
+
+  // Instant offset tooltip for [data-offset] cells
+  const tip = document.createElement('div');
+  tip.style.cssText = 'position:fixed;z-index:99999;background:rgba(30,30,30,0.92);color:#fff;font-size:11px;padding:5px 9px;border-radius:3px;pointer-events:none;white-space:nowrap;display:none;box-shadow:0 2px 6px rgba(0,0,0,0.3);';
+  document.body.appendChild(tip);
+
+  marker.once('popupclose', () => { if (tip.parentNode) tip.parentNode.removeChild(tip); });
+
+  container.querySelectorAll('[data-offset]').forEach(cell => {
+    cell.addEventListener('mouseenter', e => {
+      tip.textContent = cell.getAttribute('data-offset');
+      tip.style.display = 'block';
+      tip.style.left = (e.clientX + 14) + 'px';
+      tip.style.top  = (e.clientY - 10) + 'px';
+    });
+    cell.addEventListener('mousemove', e => {
+      tip.style.left = (e.clientX + 14) + 'px';
+      tip.style.top  = (e.clientY - 10) + 'px';
+    });
+    cell.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+  });
 }
 
 function wireBreakingPopupEvents(container, marker) {
+  const breakingMonthBtn = container.querySelector('#breakingMonthBtn');
+  if (breakingMonthBtn) {
+    breakingMonthBtn.addEventListener('click', async (e) => {
+      e.stopPropagation(); e.preventDefault();
+      breakingMonthBtn.textContent = 'Loading…';
+      breakingMonthBtn.disabled = true;
+      if (!breakingHistoryMonths) breakingHistoryMonths = await discoverHistoryMonthsForYearlySheet('BreakingHistory');
+      const payload = await fetchBreakingTotals(false, breakingCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderBreakingPopup(payload, allMarkersData, stockIndexGlobal)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBreakingPopupEvents(el, marker); }, 0);
+    });
+  }
+  const breakingCalToggle = container.querySelector('#breakingMonthCalendarToggle');
+  if (breakingCalToggle) {
+    breakingCalToggle.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const cal = container.querySelector('#breakingMonthCalendar');
+      if (cal) cal.style.display = cal.style.display === 'none' ? '' : 'none';
+    });
+  }
+  container.querySelectorAll('.breakingMonthCell').forEach(cell => {
+    cell.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const val = cell.getAttribute('data-value');
+      breakingCurrentPeriod = val === 'current' ? null : { year: +val.split('-')[0], month: +val.split('-')[1] };
+      const payload = await fetchBreakingTotals(false, breakingCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderBreakingPopup(payload, allMarkersData, stockIndexGlobal)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBreakingPopupEvents(el, marker); }, 0);
+    });
+  });
+  const breakingResetBtn = container.querySelector('#breakingMonthResetBtn');
+  if (breakingResetBtn) {
+    breakingResetBtn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      breakingCurrentPeriod = null;
+      const payload = await fetchBreakingTotals(false, null);
+      marker.setPopupContent(unescapeAngles(renderBreakingPopup(payload, allMarkersData, stockIndexGlobal)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBreakingPopupEvents(el, marker); }, 0);
+    });
+  }
+
   // Activity
   const activityToggle = container.querySelector('#breakingToggle');
   const activityBlock  = container.querySelector('#breakingActivity');
@@ -3087,6 +3365,47 @@ function wireBreakingPopupEvents(container, marker) {
 }
 
 function wireBurningPopupEvents(container, marker) {
+  const burningMonthBtn = container.querySelector('#burningMonthBtn');
+  if (burningMonthBtn) {
+    burningMonthBtn.addEventListener('click', async (e) => {
+      e.stopPropagation(); e.preventDefault();
+      burningMonthBtn.textContent = 'Loading…';
+      burningMonthBtn.disabled = true;
+      if (!burningHistoryMonths) burningHistoryMonths = await discoverHistoryMonthsForYearlySheet('BurningHistory');
+      const payload = await fetchBurningTotals(false, burningCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderBurningPopup(payload, allMarkersData, stockIndexGlobal)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBurningPopupEvents(el, marker); }, 0);
+    });
+  }
+  const burningCalToggle = container.querySelector('#burningMonthCalendarToggle');
+  if (burningCalToggle) {
+    burningCalToggle.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const cal = container.querySelector('#burningMonthCalendar');
+      if (cal) cal.style.display = cal.style.display === 'none' ? '' : 'none';
+    });
+  }
+  container.querySelectorAll('.burningMonthCell').forEach(cell => {
+    cell.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const val = cell.getAttribute('data-value');
+      burningCurrentPeriod = val === 'current' ? null : { year: +val.split('-')[0], month: +val.split('-')[1] };
+      const payload = await fetchBurningTotals(false, burningCurrentPeriod);
+      marker.setPopupContent(unescapeAngles(renderBurningPopup(payload, allMarkersData, stockIndexGlobal)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBurningPopupEvents(el, marker); }, 0);
+    });
+  });
+  const burningResetBtn = container.querySelector('#burningMonthResetBtn');
+  if (burningResetBtn) {
+    burningResetBtn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      burningCurrentPeriod = null;
+      const payload = await fetchBurningTotals(false, null);
+      marker.setPopupContent(unescapeAngles(renderBurningPopup(payload, allMarkersData, stockIndexGlobal)));
+      setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBurningPopupEvents(el, marker); }, 0);
+    });
+  }
+
   const refresh = container.querySelector('#burningRefresh');
 
   // Activity pieces
@@ -3247,7 +3566,7 @@ burningArea.bindTooltip('Burning Station', { permanent: false, direction: 'top' 
 burningArea.on('popupopen', async () => {
   burningArea.setPopupContent(`&lt;div style="${POPUP_CONTAINER_STYLE}"&gt;Loading…&lt;/div&gt;`);
   try {
-    const payload = await fetchBurningTotals();
+    const payload = await fetchBurningTotals(false, burningCurrentPeriod);
     const encoded = renderBurningPopup(payload, allMarkersData, stockIndexGlobal);
     const decoded = unescapeAngles(encoded);
     burningArea.setPopupContent(decoded);
@@ -3278,7 +3597,7 @@ breakingArea.bindTooltip('Breaking Pit', { permanent: false, direction: 'top' })
 breakingArea.on('popupopen', async () => {
   breakingArea.setPopupContent(`<div style="${POPUP_CONTAINER_STYLE}">Loading…</div>`);
   try {
-    const payload = await fetchBreakingTotals();
+    const payload = await fetchBreakingTotals(false, breakingCurrentPeriod);
     const encoded = renderBreakingPopup(payload, allMarkersData, stockIndexGlobal);
     const decoded = unescapeAngles(encoded);
     breakingArea.setPopupContent(decoded);
@@ -3354,7 +3673,7 @@ receivingArea.on('popupopen', async () => {
 });
 
 /* ===================================================================
- RAILCAR RECEIVING PANEL
+ RAILROAD PANEL
 =================================================================== */
 const railcarArea = L.circleMarker(railcarLatLng, {
   radius: 18,
@@ -3365,8 +3684,8 @@ const railcarArea = L.circleMarker(railcarLatLng, {
 }).addTo(map);
 window.railcarArea = railcarArea;
 
-railcarArea.bindPopup('', { maxWidth: 600, autopan: false });
-railcarArea.bindTooltip('Railcar Receiving', { permanent: false, direction: 'top' });
+railcarArea.bindPopup('', { maxWidth: 720, autopan: false });
+railcarArea.bindTooltip('Railroad', { permanent: false, direction: 'top' });
 
 railcarArea.on('popupopen', async () => {
   railcarArea.setPopupContent(`<div style="min-width:500px">Loading…</div>`);
@@ -3382,7 +3701,7 @@ railcarArea.on('popupopen', async () => {
     }, 0);
   } catch (err) {
     console.error(err);
-    railcarArea.setPopupContent('<b>Railcar Receiving</b><div style="color:#c00">Failed to load Railcars sheet.</div>');
+    railcarArea.setPopupContent('<b>Railroad</b><div style="color:#c00">Failed to load Railcars sheet.</div>');
   }
 });
 
@@ -3541,6 +3860,7 @@ function isPastDueExempt(marker, stockIndex) {
         material: s?.material ?? '',
         marker: m._leaflet,
         type: m.type,
+        invLbs: (s && typeof s.operating_inventory_lbs === 'number') ? s.operating_inventory_lbs : null,
         lastZero: lz,
         ageLabel: (ageMonths !== null && ageMonths >= 0) ? formatAgeYM(ageMonths) : ''
       };
@@ -3786,6 +4106,7 @@ function isPastDueExempt(marker, stockIndex) {
               <div style="color: #666; margin-top: 4px;">
                 ${p.name}
               </div>
+              ${typeof p.invLbs === 'number' ? `<div style="color:#444;margin-top:3px;font-size:11px">Inventory: <b>${fmtInt(p.invLbs)} lbs</b></div>` : ''}
               ${lz ? `<div style="color:#888;margin-top:3px;font-size:11px">Last Zero: <span style="${codeStyle}">${lz}</span>${p.ageLabel ? ` · <span style="${codeStyle}">${p.ageLabel}</span>` : ''}</div>` : ''}
             </div>
             <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
@@ -4183,3 +4504,22 @@ document.getElementById('getCoords').addEventListener('click', async () => {
  GLOBAL ERROR LOGGING
 =================================================================== */
 window.addEventListener("error", e => console.error("Error:", e.message));
+
+// Pre-load History.xlsx and discover available months so the month selector
+// opens instantly without a loading step on the first click.
+(async () => {
+  try {
+    const [rx, bk, burn, brk] = await Promise.all([
+      discoverHistoryMonths('Receiving1'),
+      discoverHistoryMonths('Consumption1'),
+      discoverHistoryMonthsForYearlySheet('BurningHistory'),
+      discoverHistoryMonthsForYearlySheet('BreakingHistory')
+    ]);
+    receivingHistoryMonths = rx;
+    bucketHistoryMonths = bk;
+    burningHistoryMonths = burn;
+    breakingHistoryMonths = brk;
+  } catch (err) {
+    console.warn('History pre-load failed — month selector will discover on demand:', err);
+  }
+})();
