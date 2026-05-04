@@ -2642,15 +2642,15 @@ function renderRailcarPopup(payload) {
       </table>
     </div>
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-      <button type="button" id="railcarOnsiteToggle" style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f8f8f8;cursor:pointer">Railcars Onsite (${active.length})</button>
+      ${railcarCurrentPeriod === null ? `<button type="button" id="railcarOnsiteToggle" style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f8f8f8;cursor:pointer">Railcars Onsite (${active.length})</button>` : ''}
       <button type="button" id="railcarReleasedToggle" style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f8f8f8;cursor:pointer">Released Railcars (${released.length})</button>
     </div>
-    <div id="railcarOnsiteSection" style="display:none;margin-top:6px">
+    ${railcarCurrentPeriod === null ? `<div id="railcarOnsiteSection" style="display:none;margin-top:6px">
       <div style="font-size:11px;font-weight:700;color:#e65100;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.06em">Railcars Onsite (${active.length})</div>
       <div style="max-height:220px;overflow-y:auto;border:1px solid #ffe0b2;border-radius:3px">
         ${activeHtml}
       </div>
-    </div>
+    </div>` : ''}
     <div id="railcarReleasedSection" style="display:none;margin-top:6px">
       <div style="font-size:11px;font-weight:700;color:#2e7d32;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.06em">Released Railcars (${released.length})</div>
       <div style="max-height:260px;overflow-y:auto;border:1px solid #c8e6c9;border-radius:3px">
