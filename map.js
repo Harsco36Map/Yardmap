@@ -232,7 +232,7 @@ Object.keys(loadCellMarkers).forEach(id => {
     div.style.margin = '8px';
     div.style.font = '12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif';
     div.style.boxShadow = '0 1px 3px rgba(0,0,0,0.15)';
-    div.innerHTML = '<div>Inventory data current as of —</div><div style="margin-top:4px;color:#555">Total yard inventory: —</div>';
+    div.innerHTML = '<div>Inventory data current as of —</div><div style="margin-top:4px;color:#555">Total yard inventory: —</div><div id="materialFlowLines"><div id="materialReceivedBannerLine" style="margin-top:4px;padding:1px 4px;border-radius:3px;background:#c8e6c9;color:#1b5e20">Material Received: —</div><div id="materialConsumedBannerLine" style="margin-top:4px;padding:1px 4px;border-radius:3px;background:#ffcdd2;color:#b71c1c">Material Consumed: —</div></div>';
     return div;
   };
   ctrl.addTo(map);
@@ -247,12 +247,70 @@ Object.keys(loadCellMarkers).forEach(id => {
         : '—';
       banner.innerHTML = `
         <div>Inventory data current as of ${formattedDate}</div>
-        <div style="margin-top:4px;color:#555">Total yard inventory: <b>${inventoryText}</b></div>
+        <div style="margin-top:4px;color:#555">Total yard inventory: <b id="invWeightSpan" style="cursor:help">${inventoryText}</b></div>
+        <div id="materialFlowLines">
+          <div id="materialReceivedBannerLine" style="margin-top:4px;padding:1px 4px;border-radius:3px;background:#c8e6c9;color:#1b5e20">Material Received: —</div>
+          <div id="materialConsumedBannerLine" style="margin-top:4px;padding:1px 4px;border-radius:3px;background:#ffcdd2;color:#b71c1c">Material Consumed: —</div>
+        </div>
       `;
+      updateMaterialReceivedBanner();
     }
   }).catch(err => console.warn('stockData.json meta fetch failed:', err));
 })();
 
+
+function updateMaterialReceivedBanner() {
+  const receivedEl = document.getElementById('materialReceivedBannerLine');
+  const consumedEl = document.getElementById('materialConsumedBannerLine');
+  const flowLines = document.getElementById('materialFlowLines');
+  const invSpan = document.getElementById('invWeightSpan');
+
+  const hasReceived = currentMonthTruckWeight !== null || currentMonthRailWeight !== null;
+  const hasConsumed = currentMonthBucketPounds !== null;
+
+  const truck = typeof currentMonthTruckWeight === 'number' ? currentMonthTruckWeight : 0;
+  const rail = typeof currentMonthRailWeight === 'number' ? currentMonthRailWeight : 0;
+  const received = truck + rail;
+  const consumed = typeof currentMonthBucketPounds === 'number' ? currentMonthBucketPounds : 0;
+
+  if (receivedEl && hasReceived) {
+    receivedEl.innerHTML = `Material Received: <b>${fmtInt(received)} lbs</b>`;
+  }
+  if (consumedEl && hasConsumed) {
+    consumedEl.innerHTML = `Material Consumed: <b>${fmtInt(consumed)} lbs</b>`;
+  }
+
+  if (flowLines && receivedEl && consumedEl && hasReceived && hasConsumed) {
+    if (consumed > received) {
+      flowLines.insertBefore(consumedEl, receivedEl);
+    } else {
+      flowLines.insertBefore(receivedEl, consumedEl);
+    }
+    if (invSpan) {
+      const net = received - consumed;
+      const netText = `${net >= 0 ? '+' : '-'} ${fmtInt(Math.abs(net))} lbs`;
+      invSpan.removeAttribute('title');
+
+      let tip = document.getElementById('invNetTooltip');
+      if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'invNetTooltip';
+        tip.style.cssText = 'display:none;position:fixed;background:#333;color:#fff;padding:3px 8px;border-radius:3px;font:12px system-ui,sans-serif;pointer-events:none;z-index:9999;white-space:nowrap';
+        document.body.appendChild(tip);
+      }
+      tip.textContent = netText;
+
+      invSpan.onmouseenter = () => {
+        const bannerRect = document.getElementById('invBanner').getBoundingClientRect();
+        tip.style.left = bannerRect.left + 'px';
+        tip.style.top  = (bannerRect.bottom + 4) + 'px';
+        tip.style.display = 'block';
+      };
+      invSpan.onmousemove  = null;
+      invSpan.onmouseleave = () => { tip.style.display = 'none'; };
+    }
+  }
+}
 
 /* ===================================================================
    BURNING STATION  — stand-alone (not in markers.json / overlay)
@@ -273,6 +331,9 @@ let breakingCache = { at: 0, data: null };
 let bucketLoadingCache = { at: 0, data: null };
 let receivingCache = { at: 0, data: null };
 let railcarCache = { at: 0, data: null };
+let currentMonthTruckWeight = null;
+let currentMonthRailWeight = null;
+let currentMonthBucketPounds = null;
 let historyWorkbookCache = { at: 0, workbook: null };
 const receivingHistoryCache = {};
 const bucketHistoryCache = {};
@@ -292,7 +353,13 @@ const railcarHistoryCache = {};
 let railcarPhotoOverlay = null;
 let latestInventoryPeriod = { year: null, month: null };
 
+
 function fmtInt(n)  { return (typeof n === 'number' && isFinite(n)) ? Math.round(n).toLocaleString('en-US') : '—'; }
+function parseWeight(s) {
+  if (!s) return NaN;
+  const n = Number(String(s).replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : NaN;
+}
 
 function parseInventoryReportDate(dateStr) {
   if (!dateStr) return null;
@@ -1842,6 +1909,8 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
     bucketHistoryCache[`${periodOverride.year}-${periodOverride.month}`] = payload;
   } else {
     bucketLoadingCache = { at: now, data: payload };
+    currentMonthBucketPounds = totalPounds;
+    updateMaterialReceivedBanner();
   }
   return payload;
 }
@@ -2190,6 +2259,8 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
     receivingHistoryCache[`${periodOverride.year}-${periodOverride.month}`] = payload;
   } else {
     receivingCache = { at: now, data: payload };
+    currentMonthTruckWeight = totalWeight;
+    updateMaterialReceivedBanner();
   }
   return payload;
 }
@@ -2266,6 +2337,12 @@ async function fetchRailcarSummary(force = false, periodOverride = null) {
     railcarHistoryCache[key] = payload;
   } else {
     railcarCache = { at: now, data: payload };
+    currentMonthRailWeight = released.reduce((sum, car) => {
+      const g = parseWeight(car.ourGross);
+      const t = parseWeight(car.ourTare);
+      return (Number.isFinite(g) && Number.isFinite(t)) ? sum + (g - t) : sum;
+    }, 0);
+    updateMaterialReceivedBanner();
   }
   return payload;
 }
@@ -2501,11 +2578,6 @@ function renderRailcarPopup(payload) {
   const released = payload.released || [];
   const total = Array.isArray(payload.railcars) ? payload.railcars.length : 0;
 
-  const parseWeight = s => {
-    if (!s) return NaN;
-    const n = Number(String(s).replace(/,/g, '').trim());
-    return Number.isFinite(n) ? n : NaN;
-  };
   const fmtW = s => {
     const n = parseWeight(s);
     return Number.isFinite(n) ? fmtInt(n) : (s || '—');
@@ -3114,6 +3186,7 @@ function wireReceivingPopupEvents(container, marker) {
         if (!detailCell) return;
 
         const truckRows = Array.isArray(dayRow.truckDetails) ? dayRow.truckDetails : [];
+        const pastDueCodes = new Set((window.pastDue || []).map(p => normalizePileCode(p.code)));
         const detailHtml = truckRows.length > 0
           ? `
             <div style="font-size:11px;color:#666;margin-bottom:4px">${fmtInt(dayRow.trucks)} trucks received on ${esc(dayRow.dateLabel)}</div>
@@ -3131,8 +3204,9 @@ function wireReceivingPopupEvents(container, marker) {
                 ${truckRows.map((item, idx) => {
                   const hasRemarks = !!(item.remarks && item.remarks.length > 0);
                   const hasWeights = !!(item.gross || item.tare || item.net);
-                  const rowStyle = item.isStoppedPile ? 'background:#ffebee;' : '';
-                  const cellStyle = 'padding:2px 6px;' + (item.isStoppedPile ? 'color:#b71c1c;font-weight:700;' : '');
+                  const isHighlighted = item.isStoppedPile || pastDueCodes.has(normalizePileCode(item.pile || ''));
+                  const rowStyle = isHighlighted ? 'background:#ffebee;' : '';
+                  const cellStyle = 'padding:2px 6px;' + (isHighlighted ? 'color:#b71c1c;font-weight:700;' : '');
                   const infoId = 'tki-' + idx;
                   let rows = '<tr style="' + rowStyle + '">'
                     + '<td style="' + cellStyle + '">' + esc(item.truckNumber || '—') + '</td>'
@@ -3264,6 +3338,7 @@ function wireRailcarPopupEvents(container, marker) {
   marker.once('popupclose', () => { if (tip.parentNode) tip.parentNode.removeChild(tip); });
 
   container.querySelectorAll('[data-offset]').forEach(cell => {
+    cell.style.cursor = 'pointer';
     cell.addEventListener('mouseenter', e => {
       tip.textContent = cell.getAttribute('data-offset');
       tip.style.display = 'block';
@@ -3275,6 +3350,15 @@ function wireRailcarPopupEvents(container, marker) {
       tip.style.top  = (e.clientY - 10) + 'px';
     });
     cell.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    cell.addEventListener('click', () => {
+      const text = cell.getAttribute('data-offset');
+      navigator.clipboard.writeText(text).then(() => {
+        const prev = tip.textContent;
+        tip.textContent = 'Copied!';
+        tip.style.display = 'block';
+        setTimeout(() => { tip.textContent = prev; tip.style.display = 'none'; }, 1000);
+      });
+    });
   });
 }
 
@@ -4406,7 +4490,15 @@ function isPastDueExempt(marker, stockIndex) {
 
   window.fetchConsumptionCsv = fetchConsumptionCsv;
 
- if (unknownTypes.size) console.warn('Unknown types:', Array.from(unknownTypes));
+  if (unknownTypes.size) console.warn('Unknown types:', Array.from(unknownTypes));
+
+  // Auto-fetch banner data after all initialization is complete so the XLSX
+  // parse of Production.xlsx does not block stockIndexGlobal from being built.
+  (async () => {
+    try { await fetchReceivingSummary(); } catch (e) { console.warn('Auto-fetch receiving failed:', e); }
+    try { await fetchRailcarSummary(); } catch (e) { console.warn('Auto-fetch railcar failed:', e); }
+    try { await fetchBucketLoadingConsumption(); } catch (e) { console.warn('Auto-fetch bucket loading failed:', e); }
+  })();
 }).catch(err => console.error('Data load failed:', err));
 
 /* ===================================================================
