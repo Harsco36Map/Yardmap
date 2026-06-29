@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HENA Site 36</title>
+    <link rel="icon" type="image/png" href="icons/harsco.png">
 
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -64,10 +65,207 @@
         #searchPanelToggle:active {
             transform: scale(0.95);
         }
+
+        /* Dashboard toggle button */
+        #dashToggleBtn {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 1100;
+            width: 38px;
+            height: 38px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.25);
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s, color 0.15s;
+        }
+        #dashToggleBtn:hover { background: #334155; color: #fff; }
+
+        /* Dashboard view */
+        #dashboard {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: #0f172a;
+            color: #e2e8f0;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            z-index: 1050;
+            overflow-y: auto;
+            padding: 0 0 32px 0;
+        }
+
+        /* Dashboard header bar */
+        #dashHeader {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+            padding: 12px 20px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        #dashHeader h1 {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: #cbd5e1;
+        }
+        .dash-year-nav {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .dash-year-nav button {
+            background: #334155;
+            border: 1px solid #475569;
+            color: #94a3b8;
+            border-radius: 4px;
+            width: 28px;
+            height: 28px;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s;
+        }
+        .dash-year-nav button:hover:not(:disabled) { background: #475569; color: #fff; }
+        .dash-year-nav button:disabled { opacity: 0.3; cursor: default; }
+        #dashYearLabel {
+            font-size: 16px;
+            font-weight: 700;
+            color: #f1f5f9;
+            min-width: 50px;
+            text-align: center;
+        }
+        #dashBackBtn {
+            background: #334155;
+            border: 1px solid #475569;
+            color: #94a3b8;
+            border-radius: 4px;
+            padding: 5px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            letter-spacing: 0.05em;
+            transition: background 0.15s;
+        }
+        #dashBackBtn:hover { background: #475569; color: #fff; }
+
+        /* 4x3 month grid */
+        #dashGrid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            padding: 16px 20px;
+        }
+
+        @media (max-width: 900px) {
+            #dashGrid { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 500px) {
+            #dashGrid { grid-template-columns: 1fr; }
+        }
+
+        /* Month card */
+        .dash-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 14px 16px;
+            min-height: 200px;
+        }
+        .dash-card--current {
+            border-color: #22c55e;
+            box-shadow: 0 0 0 1px #22c55e44;
+        }
+        .dash-card--empty {
+            opacity: 0.4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #475569;
+            font-size: 13px;
+        }
+        .dash-card-title {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #94a3b8;
+            margin: 0 0 10px 0;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #334155;
+        }
+        .dash-card-title.current { color: #22c55e; }
+        .dash-metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            font-size: 12px;
+            padding: 3px 0;
+            border-bottom: 1px solid #1e293b;
+            gap: 8px;
+        }
+        .dash-metric-label {
+            color: #64748b;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .dash-metric-value {
+            color: #e2e8f0;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+        }
+        .dash-metric-value.positive { color: #22c55e; }
+        .dash-metric-value.negative { color: #f87171; }
+        .dash-metric-divider {
+            margin: 6px 0;
+            border: none;
+            border-top: 1px solid #334155;
+        }
+
+        /* Skeleton loading animation */
+        @keyframes dash-shimmer {
+            0% { background-position: -400px 0; }
+            100% { background-position: 400px 0; }
+        }
+        .dash-skeleton {
+            background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+            background-size: 800px 100%;
+            animation: dash-shimmer 1.4s infinite;
+            border-radius: 3px;
+            height: 12px;
+            margin: 6px 0;
+        }
     </style>
 </head>
 <body>
+    <button id="dashToggleBtn" title="Historical Dashboard">&#128197;</button>
     <div id="map"></div>
+    <div id="dashboard">
+        <div id="dashHeader">
+            <div class="dash-year-nav">
+                <button id="dashPrevYear" title="Previous year">&#8592;</button>
+                <span id="dashYearLabel">—</span>
+                <button id="dashNextYear" title="Next year">&#8594;</button>
+            </div>
+            <h1>Historical Dashboard</h1>
+            <button id="dashBackBtn">&#8592; Back to Map</button>
+        </div>
+        <div id="dashGrid"></div>
+    </div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="xlsx.full.min.js"></script>
     <script src="map.js"></script>
