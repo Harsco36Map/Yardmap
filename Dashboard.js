@@ -20,7 +20,7 @@ async function fetchMonthSummary(year, month) {
   const truckLbs = recv?.totals?.totalWeight ?? null;
   const railLbs  = railWeightLbs > 0 ? railWeightLbs : (released.length > 0 ? 0 : null);
 
-  return {
+  const summary = {
     truckTons:    recv?.totals?.totalTons    ?? null,
     truckLbs,
     truckCount:   recv?.totals?.totalTrucks  ?? null,
@@ -31,13 +31,24 @@ async function fetchMonthSummary(year, month) {
     consumedLbs:  bucket?.totals?.totalPounds ?? null,
     totalHeats:   bucket?.totals?.totalHeats  ?? null,
     avgDailyTons: bucket?.totals?.avgTons     ?? null,
+    buckets:      bucket?.rows ? bucket.rows.reduce((sum, r) => sum + (r.bucketsLoaded || 0), 0) : null,
     brokenTons:    breaking?.totals?.totalTons  ?? null,
     brokenLbs:     breaking?.totals?.totalLbs   ?? null,
     cutTons:       burning?.totals?.netTons     ?? null,
     cutLbs:        burning?.totals?.netLbs      ?? null,
+    cuts:          burning?.totals?.cuts        ?? null,
     billableTons:  burning?.totals?.billableTons ?? null,
     billableLbs:   burning?.totals?.billableTons != null ? burning.totals.billableTons * 2000 : null,
   };
+
+  summary.receivedTons = (summary.truckTons !== null || summary.railTons !== null)
+    ? (summary.truckTons ?? 0) + (summary.railTons ?? 0)
+    : null;
+  summary.netChange = (summary.receivedTons !== null || summary.consumedTons !== null)
+    ? (summary.receivedTons ?? 0) - (summary.consumedTons ?? 0)
+    : null;
+
+  return summary;
 }
 
 // Returns true if any field in a summary object has actual data.
@@ -45,89 +56,45 @@ function dashSummaryHasData(s) {
   return s && Object.values(s).some(v => v !== null && v !== 0);
 }
 
-// Formats a number as tons with one decimal place, or '—' if null.
-function dashFmt(val, decimals = 1) {
-  if (val === null || val === undefined || !Number.isFinite(val)) return '—';
-  return val.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-}
-
 // Renders the HTML for one month card. data is null for months with no history.
+// Metric rows are driven by DASH_METRICS (DashboardCompare.js): each row is a
+// button that selects that metric for cross-month comparison, and the month
+// title opens the drill-down overlay (DashboardDetail.js).
 function renderDashCard(year, month, data) {
   const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const name = MONTHS[month] || 'Month';
   const { year: curY, month: curM } = getCurrentInventoryPeriod();
   const isCurrent = year === curY && month === curM;
   const cardClass = 'dash-card' + (isCurrent ? ' dash-card--current' : '');
-  const titleClass = 'dash-card-title' + (isCurrent ? ' current' : '');
 
   if (!data || !dashSummaryHasData(data)) {
     return `<div class="${cardClass} dash-card--empty">
-      <div>
-        <div class="${titleClass}">${name}</div>
+      <div style="text-align:center">
+        <div class="dash-card-title${isCurrent ? ' current' : ''}" style="border-bottom:none">${name}</div>
         <div style="margin-top:12px">No data</div>
       </div>
     </div>`;
   }
 
-  const truckRailTons = (data.truckTons ?? 0) + (data.railTons ?? 0);
-  const netChange = (truckRailTons > 0 || data.consumedTons !== null)
-    ? truckRailTons - (data.consumedTons ?? 0)
-    : null;
-  const netChangeLbs = (data.truckLbs !== null || data.railLbs !== null || data.consumedLbs !== null)
-    ? ((data.truckLbs ?? 0) + (data.railLbs ?? 0)) - (data.consumedLbs ?? 0)
-    : null;
-  const netClass = netChange === null ? '' : (netChange >= 0 ? ' positive' : ' negative');
-
-  const row = (label, value, unit = '') =>
-    `<div class="dash-metric">
-      <span class="dash-metric-label">${label}</span>
-      <span class="dash-metric-value">${value}${unit ? '<span style="color:#475569;font-weight:400"> ' + unit + '</span>' : ''}</span>
-    </div>`;
-
-  const fmtLbs = rawLbs => (rawLbs !== null && Number.isFinite(rawLbs))
-    ? rawLbs.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' lbs'
-    : null;
-
-  const truckLbs    = fmtLbs(data.truckLbs);
-  const railLbs     = fmtLbs(data.railLbs);
-  const consumedLbs = fmtLbs(data.consumedLbs);
-
-  const combinedRow = (label, tons, lbs, count, countUnit) => {
-    const tonsStr = dashFmt(tons);
-    const weight = lbs ? `${tonsStr} tons / ${lbs}` : `${tonsStr} tons`;
-    const countStr = count !== null ? `${count} ${countUnit}` : '';
-    return `<div class="dash-metric" style="align-items:flex-start">
-      <span class="dash-metric-label" style="padding-top:1px">${label}</span>
-      <span class="dash-metric-value" style="text-align:right">
-        ${weight}
-        ${countStr ? `<br><span style="color:#64748b;font-size:10px;font-weight:400">${countStr}</span>` : ''}
-      </span>
-    </div>`;
-  };
+  const rows = DASH_CARD_ROWS.map(key => {
+    const cfg = dashMetricByKey(key);
+    const slot = _dashSelected.indexOf(key);
+    const v = data[key];
+    const valClass = (cfg.signed && v !== null && Number.isFinite(v)) ? (v >= 0 ? ' pos' : ' neg') : '';
+    const sign = (cfg.signed && v !== null && Number.isFinite(v) && v >= 0) ? '+' : '';
+    const indent = (key === 'truckCount' || key === 'railcarCount') ? ' style="padding-left:16px"' : '';
+    return `<button type="button" class="dash-mrow${slot === 0 ? ' sel1' : slot === 1 ? ' sel2' : ''}" data-key="${key}" title="Compare ${cfg.label} across months">
+      <span class="lbl"${indent}>${cfg.label}</span>
+      <span class="val${valClass}">${sign}${dashNum(v, cfg.dec)} <span class="unit">${cfg.unit}</span></span>
+    </button>` + (DASH_CARD_DIVIDER_AFTER.has(key) ? '<hr class="dash-metric-divider">' : '');
+  }).join('');
 
   return `<div class="${cardClass}">
-    <div class="${titleClass}">${name}${isCurrent ? ' <span style="font-size:9px;vertical-align:middle;opacity:0.8">●</span>' : ''}</div>
-    ${combinedRow('Consumed', data.consumedTons, consumedLbs, data.totalHeats !== null && data.totalHeats > 0 ? data.totalHeats : null, 'heats')}
-    ${row('Avg Daily Use', dashFmt(data.avgDailyTons), 'tons/day')}
-    <hr class="dash-metric-divider">
-    ${combinedRow('Broken', data.brokenTons, fmtLbs(data.brokenLbs), null, '')}
-    <div class="dash-metric" style="align-items:flex-start">
-      <span class="dash-metric-label" style="padding-top:1px">Cut</span>
-      <span class="dash-metric-value" style="text-align:right">
-        ${dashFmt(data.billableTons)} Billable tons
-        ${data.cutTons !== null ? `<br><span style="color:#64748b;font-size:10px;font-weight:400">Total: ${dashFmt(data.cutTons)} tons / ${fmtLbs(data.cutLbs)}</span>` : ''}
-      </span>
-    </div>
-    <hr class="dash-metric-divider">
-    ${combinedRow('Received (Truck)', data.truckTons, truckLbs, data.truckCount, 'trucks')}
-    ${combinedRow('Received (Railcar)', data.railTons, railLbs, data.railcarCount, 'railcars')}
-    <hr class="dash-metric-divider">
-    <div class="dash-metric" style="align-items:flex-start">
-      <span class="dash-metric-label" style="padding-top:1px">Net Inv. Change</span>
-      <span class="dash-metric-value${netClass}" style="text-align:right">
-        ${dashFmt(netChange)} tons${netChangeLbs !== null ? ` / ${fmtLbs(netChangeLbs)}` : ''}
-      </span>
-    </div>
+    <button type="button" class="dash-card-title-btn${isCurrent ? ' current' : ''}" data-month="${month}" title="Open ${name} ${year}">
+      <span>${name}${isCurrent ? ' <span style="font-size:9px;vertical-align:middle;opacity:0.8">●</span>' : ''}</span>
+      <span class="open-hint">View month &#8599;</span>
+    </button>
+    ${rows}
   </div>`;
 }
 
@@ -190,6 +157,10 @@ async function buildDashboardYear(year) {
   const grid = document.getElementById('dashGrid');
   if (!grid) return;
   grid.innerHTML = summaries.map((s, m) => renderDashCard(year, m, s)).join('');
+
+  // Hand the year's summaries to the compare layer (chips + trend charts).
+  _dashSummaries = summaries;
+  renderDashCompare();
 }
 
 // One-time init: discovers years, sets default year, wires year nav buttons.
