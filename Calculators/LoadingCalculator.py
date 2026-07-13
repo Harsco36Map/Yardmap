@@ -67,8 +67,7 @@ def main():
     pile_daily_lots = defaultdict(lambda: defaultdict(set))
     pile_grand_lots = defaultdict(set)
 
-    completed_heat_piles = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
-    completed_heat_lots = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+    completed_heat_rows = []
     heat_types = {}
 
     # ---- Bucket / Heat tracking ----
@@ -147,9 +146,18 @@ def main():
             daily_heats[date].add(heat_only)
 
         if completion_date and pile:
-            completed_heat_piles[completion_date][heat_only][pile] += consumed
-            if material:
-                completed_heat_lots[completion_date][heat_only][pile].add(material)
+            bucket_number = row[3].strip() if len(row) > 3 else ""
+            completed_heat_rows.append({
+                "date": completion_date,
+                "original_heat_bucket": heat_bucket,
+                "heat_number": heat_only,
+                "bucket_number": bucket_number,
+                "heat_type": heat_types.get(heat_only, ""),
+                "pile_number": pile,
+                "material_lot": material,
+                "total_lbs": consumed,
+                "total_tons": consumed / DEFAULT_LBS_PER_TON,
+            })
 
     # -------------------------------------------------
     # OUTPUT — Single XLSX with 4 tabs
@@ -207,26 +215,36 @@ def main():
     ws_completed_heats = wb.create_sheet("Consumption4")
     ws_completed_heats.append([
         "Date",
+        "Original_Heat_Bucket",
         "Heat_Number",
+        "Bucket_Number",
         "Heat_Type",
         "Pile_Number",
         "Material_Lots",
         "Total_Lbs",
         "Total_Tons"
     ])
-    for d in sorted(completed_heat_piles):
-        for heat_number in sorted(completed_heat_piles[d]):
-            for pile, lbs in sorted(completed_heat_piles[d][heat_number].items()):
-                lots = sorted(completed_heat_lots[d][heat_number][pile]) if pile in completed_heat_lots[d][heat_number] else []
-                ws_completed_heats.append([
-                    d.isoformat(),
-                    heat_number,
-                    heat_types.get(heat_number, ""),
-                    pile,
-                    "; ".join(lots),
-                    round(lbs, 0),
-                    round(lbs / DEFAULT_LBS_PER_TON, 2)
-                ])
+    for entry in sorted(
+        completed_heat_rows,
+        key=lambda item: (
+            item["date"],
+            item["heat_number"],
+            item["pile_number"],
+            item["material_lot"],
+            item["bucket_number"],
+        ),
+    ):
+        ws_completed_heats.append([
+            entry["date"].isoformat(),
+            entry["original_heat_bucket"],
+            entry["heat_number"],
+            entry["bucket_number"],
+            entry["heat_type"],
+            entry["pile_number"],
+            entry["material_lot"],
+            round(entry["total_lbs"], 0),
+            round(entry["total_tons"], 2),
+        ])
 
     out_xlsx = src.with_name(f"{src.stem}_loading_reports.xlsx")
     wb.save(out_xlsx)
