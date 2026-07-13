@@ -23,7 +23,7 @@ L.imageOverlay('Scrapyard.png', [
 /* ===================================================================
  Monthly consumption CSV
 =================================================================== */
-const consumptionCsvUrl = 'averageconsumption.csv'; // <-- set per month
+const consumptionCsvUrl = 'AverageConsumption.csv'; // <-- set per month
 
 /* ===================================================================
  ICON DEFINITIONS
