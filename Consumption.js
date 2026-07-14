@@ -63,8 +63,10 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
     ? `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
     : '';
 
+  // Headers are exported with underscores (e.g. "Total_Lbs") — normalize to spaces
+  // so name matching works for both old and new export formats.
   const headerRow = Array.isArray(data[0]) ? data[0] : [];
-  const headerNorm = headerRow.map(h => String(h || '').trim().toLowerCase());
+  const headerNorm = headerRow.map(h => String(h || '').trim().toLowerCase().replace(/_/g, ' '));
   const findCol = (...names) => {
     for (const name of names) {
       const idx = headerNorm.findIndex(h => h === String(name).toLowerCase());
@@ -77,7 +79,7 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
   const poundsCol = findCol('total lbs', 'lbs', 'pounds');
   const tonsCol = findCol('total tons', 'tons');
   const bucketsCol = findCol('buckets loaded', 'buckets');
-  const heatsCol = findCol('heats completed', 'heats');
+  const heatsCol = findCol('heats loaded', 'heats completed', 'heats');
 
   const resolvedDateCol = dateCol >= 0 ? dateCol : 0;
   const resolvedPoundsCol = poundsCol >= 0 ? poundsCol : 1;
@@ -86,32 +88,15 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
   const resolvedHeatsCol = heatsCol >= 0 ? heatsCol : 4;
 
   const breakdownByIsoDate = {};
-
-  const normalizeKey = (v) => String(v ?? '').trim().toUpperCase();
-  const getMaterialForLotOrPile = (lot, pile) => {
-    const lotKey = normalizeKey(lot);
-    const pileKey = normalizePileCode(pile);
-
-    if (lotKey) {
-      const byLot = Object.values(stockIndexGlobal || {}).find(item =>
-        normalizeKey(item && item.code) === lotKey
-      );
-      if (byLot && byLot.material) return String(byLot.material);
-    }
-
-    if (pileKey && stockIndexGlobal && stockIndexGlobal[pileKey] && stockIndexGlobal[pileKey].material) {
-      return String(stockIndexGlobal[pileKey].material);
-    }
-
-    return '';
-  };
+  // Lot/pile → material name translation lives in utils.js (getMaterialForLotOrPile),
+  // which checks stockIndexGlobal by lot code, then by pile, then marker names.
 
   const consumption2 = findSheetByName(workbook, historySheetName('Consumption2', periodOverride));
   if (consumption2) {
     const data2 = window.XLSX.utils.sheet_to_json(consumption2, { header: 1, raw: false });
     if (Array.isArray(data2) && data2.length >= 2) {
       const header2 = Array.isArray(data2[0]) ? data2[0] : [];
-      const header2Norm = header2.map(h => String(h || '').trim().toLowerCase());
+      const header2Norm = header2.map(h => String(h || '').trim().toLowerCase().replace(/_/g, ' '));
       const findCol2 = (...names) => {
         for (const name of names) {
           const idx = header2Norm.findIndex(h => h === String(name).toLowerCase());
@@ -125,19 +110,19 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
         return i >= 0 ? i : 0;
       })();
       const pile2Col = (() => {
-        const i = findCol2('pile utilized', 'pile used', 'pile', 'pile #');
+        const i = findCol2('pile number', 'pile utilized', 'pile used', 'pile', 'pile #');
         return i >= 0 ? i : 1;
       })();
       const lot2Col = (() => {
-        const i = findCol2('material lot# utilized', 'material lot # utilized', 'material lot # used', 'material lot #', 'lot #', 'lot');
+        const i = findCol2('material lots', 'material lot# utilized', 'material lot # utilized', 'material lot # used', 'material lot #', 'lot #', 'lot');
         return i >= 0 ? i : 2;
       })();
       const pounds2Col = (() => {
-        const i = findCol2('pounds utilized', 'total weight of material used in pounds', 'total weight of material used', 'weight (lbs)', 'pounds', 'lbs');
+        const i = findCol2('total lbs', 'pounds utilized', 'total weight of material used in pounds', 'total weight of material used', 'weight (lbs)', 'pounds', 'lbs');
         return i >= 0 ? i : 3;
       })();
       const tons2Col = (() => {
-        const i = findCol2('tons utilized', 'tons used', 'tons');
+        const i = findCol2('total tons', 'tons utilized', 'tons used', 'tons');
         return i >= 0 ? i : 4;
       })();
 
@@ -209,7 +194,7 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
     const data4 = window.XLSX.utils.sheet_to_json(consumption4, { header: 1, raw: false });
     if (Array.isArray(data4) && data4.length >= 2) {
       const header4 = Array.isArray(data4[0]) ? data4[0] : [];
-      const header4Norm = header4.map(h => String(h || '').trim().toLowerCase());
+      const header4Norm = header4.map(h => String(h || '').trim().toLowerCase().replace(/_/g, ' '));
       const findCol4 = (...names) => {
         for (const name of names) {
           const idx = header4Norm.findIndex(h => h === String(name).toLowerCase());
@@ -218,12 +203,20 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
         return -1;
       };
 
+      // Two formats exist:
+      //  - New (Production.xlsx): Date, Original_Heat_Bucket, Heat_Number, Bucket_Number,
+      //    Heat_Type, Pile_Number, Material_Lots, Total_Lbs, Total_Tons — one row per
+      //    individual bucket load entry (not aggregated).
+      //  - Old (History.xlsx month tabs, until regenerated): Date, Heat_Number, Heat_Type,
+      //    Pile_Number, Material_Lots, Total_Lbs, Total_Tons — aggregated, no bucket info.
+      const heatBucket4Col = findCol4('original heat bucket', 'heat bucket');
+      const bucketNum4Col  = findCol4('bucket number', 'bucket #');
       const date4Col  = (() => { const i = findCol4('date'); return i >= 0 ? i : 0; })();
       const heat4Col  = (() => { const i = findCol4('heat number', 'heat #', 'heat'); return i >= 0 ? i : 1; })();
-      const grade4Col = (() => { const i = findCol4('grade'); return i >= 0 ? i : 2; })();
-      const pile4Col  = (() => { const i = findCol4('pile', 'pile #', 'pile utilized'); return i >= 0 ? i : 3; })();
-      const lot4Col   = (() => { const i = findCol4('material lot #', 'lot #', 'lot'); return i >= 0 ? i : 4; })();
-      const lbs4Col   = (() => { const i = findCol4('total pounds', 'pounds', 'lbs'); return i >= 0 ? i : 5; })();
+      const grade4Col = (() => { const i = findCol4('heat type', 'grade'); return i >= 0 ? i : 2; })();
+      const pile4Col  = (() => { const i = findCol4('pile number', 'pile', 'pile #', 'pile utilized'); return i >= 0 ? i : 3; })();
+      const lot4Col   = (() => { const i = findCol4('material lots', 'material lot #', 'lot #', 'lot'); return i >= 0 ? i : 4; })();
+      const lbs4Col   = (() => { const i = findCol4('total lbs', 'total pounds', 'pounds', 'lbs'); return i >= 0 ? i : 5; })();
       const tons4Col  = (() => { const i = findCol4('total tons', 'tons'); return i >= 0 ? i : 6; })();
 
       // Build per-heat, per-day buckets first, then keep each heat only on its latest day.
@@ -255,6 +248,15 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
         const tonsCellRaw4 = row4[tons4Col];
         const tons4    = String(tonsCellRaw4 ?? '').trim() === '' ? (lbs4 / 2000) : toNum(tonsCellRaw4);
 
+        // Bucket columns only exist in the new format ("031831/3" = heat / charge bucket 3).
+        const bucketKey4 = heatBucket4Col >= 0 ? String(row4[heatBucket4Col] || '').trim() : '';
+        const bucketNum4 = bucketNum4Col >= 0 ? String(row4[bucketNum4Col] || '').trim() : '';
+        let bucketSeq4 = null;
+        if (bucketKey4.includes('/')) {
+          const seq = Number(bucketKey4.split('/').pop());
+          if (Number.isFinite(seq)) bucketSeq4 = seq;
+        }
+
         if (!heatNum4) continue;
 
         if (!heatBucketsByNumber[heatNum4]) {
@@ -268,7 +270,10 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
 
         if (pile4 || lot4 || lbs4) {
           const material4 = getMaterialForLotOrPile(lot4, pile4);
-          heatBucketsByNumber[heatNum4][iso4].materials.push({ pile: pile4, lot: lot4, material: material4, pounds: lbs4, tons: tons4 });
+          heatBucketsByNumber[heatNum4][iso4].materials.push({
+            pile: pile4, lot: lot4, material: material4, pounds: lbs4, tons: tons4,
+            bucketKey: bucketKey4, bucketSeq: bucketSeq4, bucketNumber: bucketNum4
+          });
         }
       }
 
@@ -298,7 +303,20 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
 
       Object.keys(heatBreakdownByIsoDate).forEach(iso => {
         const heatMap = heatBreakdownByIsoDate[iso];
-        heatBreakdownByIsoDate[iso] = Object.values(heatMap).sort((a, b) => {
+        heatBreakdownByIsoDate[iso] = Object.values(heatMap).map(heat => {
+          // Group material entries by charge bucket and count distinct buckets used.
+          const mats = Array.isArray(heat.materials) ? heat.materials : [];
+          mats.forEach((m, idx) => { m._idx = idx; });
+          mats.sort((a, b) => {
+            const sa = Number.isFinite(a.bucketSeq) ? a.bucketSeq : Infinity;
+            const sb = Number.isFinite(b.bucketSeq) ? b.bucketSeq : Infinity;
+            return (sa - sb) || (a._idx - b._idx);
+          });
+          mats.forEach(m => { delete m._idx; });
+          const bucketKeys = new Set(mats.map(m => m.bucketKey).filter(Boolean));
+          heat.bucketCount = bucketKeys.size > 0 ? bucketKeys.size : null;
+          return heat;
+        }).sort((a, b) => {
           const na = Number(a.heatNumber), nb = Number(b.heatNumber);
           if (!isNaN(na) && !isNaN(nb)) return na - nb;
           return String(a.heatNumber).localeCompare(String(b.heatNumber));
@@ -697,17 +715,23 @@ function wireBucketLoadingPopupEvents(container, marker) {
           const heatTotalTons = mats.reduce((s, m) => s + (Number(m.tons)   || 0), 0);
 
           const matsHtml = mats.length > 0
-            ? mats.map(m => `
-                <tr class="heat-mat-row" data-heat-idx="${hIdx}" style="display:none;background:#f7f8ff">
-                  <td style="padding:3px 8px 3px 24px;border-bottom:1px solid #e8edf8;white-space:nowrap">${esc(m.pile || '—')}</td>
+            ? mats.map(m => {
+                const bktColor = bucketColorForSeq(m.bucketSeq);
+                const rowBg = bktColor ? `${bktColor}14` : '#f7f8ff';
+                const material = m.material || getMaterialForLotOrPile(m.lot, m.pile);
+                return `
+                <tr class="heat-mat-row" data-heat-idx="${hIdx}" style="display:none;background:${rowBg}">
+                  <td style="padding:3px 8px 3px 24px;border-bottom:1px solid #e8edf8;white-space:nowrap">${bucketBadgeHtml(m)}</td>
+                  <td style="padding:3px 8px;border-bottom:1px solid #e8edf8;white-space:nowrap">${esc(m.pile || '—')}</td>
                   <td style="padding:3px 8px;border-bottom:1px solid #e8edf8;white-space:normal;overflow-wrap:anywhere;line-height:1.2">
-                    <div>${esc(m.material || '—')}</div>
+                    <div>${esc(material || '—')}</div>
                   </td>
                   <td style="padding:3px 8px;border-bottom:1px solid #e8edf8;text-align:right;white-space:nowrap">${fmtInt(m.pounds)}</td>
                   <td style="padding:3px 8px;border-bottom:1px solid #e8edf8;text-align:right;white-space:nowrap">${fmtTons2(m.tons, 3)}</td>
-                </tr>`).join('')
+                </tr>`;
+              }).join('')
             : `<tr class="heat-mat-row" data-heat-idx="${hIdx}" style="display:none;background:#f7f8ff">
-                 <td colspan="4" style="padding:4px 8px 4px 24px;color:#888;font-style:italic">No material records</td>
+                 <td colspan="5" style="padding:4px 8px 4px 24px;color:#888;font-style:italic">No material records</td>
                </tr>`;
 
           const chevron = mats.length > 0
@@ -719,11 +743,13 @@ function wireBucketLoadingPopupEvents(container, marker) {
                 style="cursor:${mats.length > 0 ? 'pointer' : 'default'};border-bottom:1px solid #c8d4f0">
               <td style="padding:5px 8px;white-space:nowrap;font-weight:600">${chevron}${esc(heat.heatNumber)}</td>
               <td style="padding:5px 8px;white-space:nowrap">${esc(heat.grade)}</td>
+              <td style="padding:5px 8px;text-align:right">${heat.bucketCount ? fmtInt(heat.bucketCount) : '—'}</td>
               <td style="padding:5px 8px;text-align:right">${fmtInt(heatTotalLbs)}</td>
               <td style="padding:5px 8px;text-align:right">${fmtTons2(heatTotalTons, 3)}</td>
             </tr>
             <tr class="heat-mat-subheader heat-mat-row" data-heat-idx="${hIdx}" style="display:none;background:#dce4f7;font-size:11px">
-              <th style="padding:2px 8px 2px 24px;text-align:left;font-weight:600;border-bottom:1px solid #c8d4f0">Pile</th>
+              <th style="padding:2px 8px 2px 24px;text-align:left;font-weight:600;border-bottom:1px solid #c8d4f0">Bucket</th>
+              <th style="padding:2px 8px;text-align:left;font-weight:600;border-bottom:1px solid #c8d4f0">Pile</th>
               <th style="padding:2px 8px;text-align:left;font-weight:600;border-bottom:1px solid #c8d4f0">Material</th>
               <th style="padding:2px 8px;text-align:right;font-weight:600;border-bottom:1px solid #c8d4f0">Pounds</th>
               <th style="padding:2px 8px;text-align:right;font-weight:600;border-bottom:1px solid #c8d4f0">Tons</th>
@@ -742,6 +768,7 @@ function wireBucketLoadingPopupEvents(container, marker) {
               <tr style="background:#e8edf8">
                 <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #c8d4f0">Heat #</th>
                 <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #c8d4f0">Grade</th>
+                <th style="padding:4px 8px;text-align:right;border-bottom:1px solid #c8d4f0">Buckets</th>
                 <th style="padding:4px 8px;text-align:right;border-bottom:1px solid #c8d4f0">Total Lbs</th>
                 <th style="padding:4px 8px;text-align:right;border-bottom:1px solid #c8d4f0">Total Tons</th>
               </tr>

@@ -1,7 +1,8 @@
 // Historical Dashboard — month drill-down overlay.
-// Daily bar chart with a metric filter, filter-specific activity tables,
-// and the expanded heat viewer (heat → grade → charge materials), fed by
-// the same month-cached fetchers the map popups use.
+// Daily bar chart with a metric filter and filter-specific viewers:
+//  - Heats → expanded heat viewer (heat → grade → charge buckets → materials)
+//  - Received (Total) → truck viewer (expandable per-truck detail) + railcar viewer
+// Fed by the same month-cached fetchers the map popups use.
 // Requires: utils.js, DashboardCompare.js (dashBarChart, dashNum), and the
 // five station files. Loaded before Dashboard.js.
 
@@ -107,8 +108,11 @@ function buildDashMonthModel(year, month, src) {
 }
 
 // ─── Open / close ──────────────────────────────────────────────────────
-async function openDashMonth(year, month) {
-  _dashOvl = { year, month, metric: 'consumed', recvSub: 'both', openDay: null, openHeat: null, model: null };
+// metric selects the initial view (e.g. 'heats' from the Heats MoM chart,
+// 'received' from any Received-family MoM chart).
+async function openDashMonth(year, month, metric = 'consumed') {
+  if (!DASH_DAILY_METRICS.some(m => m.key === metric)) metric = 'consumed';
+  _dashOvl = { year, month, metric, recvSub: 'both', openDay: null, openHeat: null, openTruckDay: null, model: null };
   const ovl = document.getElementById('dashOvl');
   const title = document.getElementById('dashOvlTitle');
   const body = document.getElementById('dashOvlBody');
@@ -151,11 +155,13 @@ function dashConsumptionTable() {
   const { year, month, model } = _dashOvl;
   const t = model.totals.bucket || {};
   const totalBuckets = model.bucketRows.reduce((s, r) => s + (r.bucketsLoaded || 0), 0);
+  // The heat viewer only opens from the month-specific Heats view.
+  const showHeatViewer = _dashOvl.metric === 'heats';
 
   const dayRows = model.bucketRows.map(r => {
     const day = r.day || dashIsoDay(r.isoDate);
     const heats = Array.isArray(r.heatBreakdown) ? r.heatBreakdown : [];
-    const open = _dashOvl.openDay === r.isoDate;
+    const open = showHeatViewer && _dashOvl.openDay === r.isoDate;
     let detail = '';
     if (open && heats.length) {
       const heatRows = heats.map((h, hi) => {
@@ -164,18 +170,22 @@ function dashConsumptionTable() {
         const totTons = mats.reduce((s, x) => s + (Number(x.tons) || 0), 0);
         const hOpen = _dashOvl.openHeat === hi;
         const matRows = hOpen
-          ? `<tr class="dash-mat-row" style="background:#233150"><td style="color:#64748b;font-size:11px">Pile</td><td style="color:#64748b;font-size:11px">Material</td><td style="color:#64748b;font-size:11px">Lot #</td><td style="color:#64748b;font-size:11px">Pounds</td><td style="color:#64748b;font-size:11px">Tons</td></tr>`
+          ? `<tr class="dash-mat-row" style="background:#233150"><td style="color:#64748b;font-size:11px">Bucket</td><td style="color:#64748b;font-size:11px">Pile</td><td style="color:#64748b;font-size:11px">Material</td><td style="color:#64748b;font-size:11px">Lot #</td><td style="color:#64748b;font-size:11px">Pounds</td><td style="color:#64748b;font-size:11px">Tons</td></tr>`
             + (mats.length
-              ? mats.map(x => `<tr class="dash-mat-row"><td>${esc(x.pile || '—')}</td><td>${esc(x.material || '—')}</td><td>${esc(x.lot || '—')}</td><td>${fmtInt(x.pounds)}</td><td>${fmtTons2(x.tons, 2)}</td></tr>`).join('')
-              : '<tr class="dash-mat-row"><td colspan="5" style="color:#64748b;font-style:italic">No material records</td></tr>')
+              ? mats.map(x => {
+                  const bktColor = bucketColorForSeq(x.bucketSeq);
+                  const material = x.material || getMaterialForLotOrPile(x.lot, x.pile);
+                  return `<tr class="dash-mat-row"${bktColor ? ` style="background:${bktColor}1c"` : ''}><td>${bucketBadgeHtml(x)}</td><td>${esc(x.pile || '—')}</td><td>${esc(material || '—')}</td><td>${esc(x.lot || '—')}</td><td>${fmtInt(x.pounds)}</td><td>${fmtTons2(x.tons, 2)}</td></tr>`;
+                }).join('')
+              : '<tr class="dash-mat-row"><td colspan="6" style="color:#64748b;font-style:italic">No material records</td></tr>')
           : '';
         return `<tr class="dash-heat-hdr${hOpen ? ' open' : ''}" data-heat="${hi}">
-          <td><span class="chev">▶</span><b>${esc(h.heatNumber)}</b></td><td>${esc(h.grade || '—')}</td><td></td>
+          <td><span class="chev">▶</span><b>${esc(h.heatNumber)}</b></td><td>${esc(h.grade || '—')}</td><td>${h.bucketCount ? fmtInt(h.bucketCount) : '—'}</td><td></td>
           <td>${fmtInt(totLbs)}</td><td>${fmtTons2(totTons, 2)}</td></tr>${matRows}`;
       }).join('');
       detail = `<tr class="dash-detail"><td colspan="5">
-        <div style="font-size:12px;color:#94a3b8;margin-bottom:6px"><b style="color:#e2e8f0">${heats.length} heat${heats.length !== 1 ? 's' : ''} completed on ${month + 1}/${day}</b> — click a heat to see its charge materials</div>
-        <table class="dash-heat-tbl"><tr><th>Heat #</th><th>Grade</th><th></th><th>Total Lbs</th><th>Total Tons</th></tr>${heatRows}</table>
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:6px"><b style="color:#e2e8f0">${heats.length} heat${heats.length !== 1 ? 's' : ''} completed on ${month + 1}/${day}</b> — click a heat to see its charge buckets and materials</div>
+        <table class="dash-heat-tbl"><tr><th>Heat #</th><th>Grade</th><th>Buckets</th><th></th><th>Total Lbs</th><th>Total Tons</th></tr>${heatRows}</table>
       </td></tr>`;
     }
     return `<tr>
@@ -183,13 +193,16 @@ function dashConsumptionTable() {
       <td>${fmtInt(r.pounds)}</td>
       <td>${fmtTons2(r.tons, 2)}</td>
       <td>${fmtInt(r.bucketsLoaded)}</td>
-      <td>${heats.length > 0
+      <td>${showHeatViewer && heats.length > 0
         ? `<button type="button" class="dash-heat-btn${open ? ' active' : ''}" data-date="${esc(r.isoDate)}">${fmtInt(r.heatsCompleted)}</button>`
         : fmtInt(r.heatsCompleted)}</td>
     </tr>${detail}`;
   }).join('');
 
-  return `<div class="dash-sec-title">Bucket Loading — Daily Activity <span style="font-weight:400;text-transform:none;letter-spacing:0">(click a heat count to open the heat viewer)</span></div>
+  const hint = showHeatViewer
+    ? ' <span style="font-weight:400;text-transform:none;letter-spacing:0">(click a heat count to open the heat viewer)</span>'
+    : '';
+  return `<div class="dash-sec-title">Bucket Loading — Daily Activity${hint}</div>
     <div class="dash-tbl-wrap"><table>
       <tr><th>Date</th><th>Pounds</th><th>Tons</th><th>Buckets</th><th>Heats</th></tr>
       ${dayRows || '<tr><td colspan="5" style="color:#64748b">No consumption rows for this month.</td></tr>'}
@@ -200,16 +213,48 @@ function dashConsumptionTable() {
 function dashTruckTable() {
   const { year, month, model } = _dashOvl;
   const t = model.totals.recv || {};
+  const pastDueCodes = new Set((window.pastDue || []).map(p => normalizePileCode(p.code)));
+
   const rows = model.recvRows.map(r => {
     const day = dashIsoDay(r.isoDate);
+    const trucks = Array.isArray(r.truckDetails) ? r.truckDetails : [];
+    const open = _dashOvl.openTruckDay === r.isoDate;
+    let detail = '';
+    if (open && trucks.length) {
+      const truckRows = trucks.map(item => {
+        const material = item.material || getMaterialForLotOrPile(item.lot, item.pile);
+        const flagged = item.isStoppedPile || pastDueCodes.has(normalizePileCode(item.pile || ''));
+        const flagStyle = flagged ? ' style="color:#f87171;font-weight:700"' : '';
+        const net = parseWeight(item.net);
+        const infoBits = [];
+        if (item.gross || item.tare) infoBits.push(`Gross: ${esc(item.gross || '—')} · Tare: ${esc(item.tare || '—')}`);
+        if (item.remarks) infoBits.push(esc(item.remarks));
+        const infoRow = infoBits.length
+          ? `<tr class="dash-mat-row"><td colspan="5" style="text-align:left;color:#94a3b8;font-size:11px;white-space:normal">${infoBits.join(' &nbsp;—&nbsp; ')}</td></tr>`
+          : '';
+        return `<tr class="dash-mat-row">
+          <td>${esc(item.truckNumber || '—')}</td>
+          <td>${esc(item.ticketId || '—')}</td>
+          <td${flagStyle}>${esc(item.pile || '—')}</td>
+          <td class="l"${flagStyle}>${esc(material || '—')}</td>
+          <td>${Number.isFinite(net) ? fmtInt(net) : '—'}</td>
+        </tr>${infoRow}`;
+      }).join('');
+      detail = `<tr class="dash-detail"><td colspan="4">
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:6px"><b style="color:#e2e8f0">${fmtInt(r.trucks)} trucks received on ${month + 1}/${day}</b></div>
+        <table class="dash-heat-tbl"><tr><th>Truck #</th><th>Ticket ID</th><th>Pile</th><th class="l">Material</th><th>Net Lbs</th></tr>${truckRows}</table>
+      </td></tr>`;
+    }
     return `<tr>
       <td>${day ? dashDayCell(year, month, day) : esc(r.dateLabel)}</td>
-      <td>${fmtInt(r.trucks)}</td>
+      <td>${trucks.length > 0
+        ? `<button type="button" class="dash-truck-btn${open ? ' active' : ''}" data-date="${esc(r.isoDate)}">${fmtInt(r.trucks)}</button>`
+        : fmtInt(r.trucks)}</td>
       <td>${fmtInt(r.weight)}</td>
       <td>${fmtTons2((r.weight || 0) / 2000, 2)}</td>
-    </tr>`;
+    </tr>${detail}`;
   }).join('');
-  return `<div class="dash-sec-title">Trucks Received — Daily Activity</div>
+  return `<div class="dash-sec-title">Trucks Received — Daily Activity <span style="font-weight:400;text-transform:none;letter-spacing:0">(click a truck count to open the truck viewer)</span></div>
     <div class="dash-tbl-wrap"><table>
       <tr><th>Date</th><th>Trucks</th><th>Pounds</th><th>Tons</th></tr>
       ${rows || '<tr><td colspan="4" style="color:#64748b">No truck receiving rows for this month.</td></tr>'}
@@ -223,10 +268,11 @@ function dashRailTable() {
     const statusLower = String(c.status).toLowerCase();
     const statusColor = statusLower.includes('released') ? '#22c55e'
       : statusLower.includes('reject') ? '#f87171' : '#94a3b8';
+    const material = c.material || getMaterialForLotOrPile(c.lot, '');
     return `<tr>
       <td>${esc(c.car)}</td>
       <td class="l">${esc(c.supplier || '—')}</td>
-      <td class="l">${esc(c.material || '—')}</td>
+      <td class="l">${esc(material || '—')}</td>
       <td>${esc(c.lot || '—')}</td>
       <td>${c.netLbs !== null ? fmtInt(c.netLbs) : '—'}</td>
       <td>${c.netLbs !== null ? fmtTons2(c.netLbs / 2000, 2) : '—'}</td>
@@ -373,12 +419,20 @@ document.getElementById('dashOvlBody')?.addEventListener('click', e => {
     _dashOvl.metric = chip.getAttribute('data-dkey');
     _dashOvl.openDay = null;
     _dashOvl.openHeat = null;
+    _dashOvl.openTruckDay = null;
     renderDashOvl();
     return;
   }
   const sub = e.target.closest('.dash-chip[data-rsub]');
   if (sub) {
     _dashOvl.recvSub = sub.getAttribute('data-rsub');
+    renderDashOvl();
+    return;
+  }
+  const tb = e.target.closest('.dash-truck-btn');
+  if (tb) {
+    const key = tb.getAttribute('data-date');
+    _dashOvl.openTruckDay = _dashOvl.openTruckDay === key ? null : key;
     renderDashOvl();
     return;
   }

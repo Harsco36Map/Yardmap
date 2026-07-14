@@ -58,7 +58,7 @@ function dashSummaryHasData(s) {
 
 // Renders the HTML for one month card. data is null for months with no history.
 // Metric rows are driven by DASH_METRICS (DashboardCompare.js): each row is a
-// button that selects that metric for cross-month comparison, and the month
+// button that selects that metric's month-over-month chart, and the month
 // title opens the drill-down overlay (DashboardDetail.js).
 function renderDashCard(year, month, data) {
   const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -78,12 +78,11 @@ function renderDashCard(year, month, data) {
 
   const rows = DASH_CARD_ROWS.map(key => {
     const cfg = dashMetricByKey(key);
-    const slot = _dashSelected.indexOf(key);
     const v = data[key];
     const valClass = (cfg.signed && v !== null && Number.isFinite(v)) ? (v >= 0 ? ' pos' : ' neg') : '';
     const sign = (cfg.signed && v !== null && Number.isFinite(v) && v >= 0) ? '+' : '';
     const indent = (key === 'truckCount' || key === 'railcarCount') ? ' style="padding-left:16px"' : '';
-    return `<button type="button" class="dash-mrow${slot === 0 ? ' sel1' : slot === 1 ? ' sel2' : ''}" data-key="${key}" title="Compare ${cfg.label} across months">
+    return `<button type="button" class="dash-mrow${key === _dashMetric ? ' sel1' : ''}" data-key="${key}" title="View ${cfg.label} month over month">
       <span class="lbl"${indent}>${cfg.label}</span>
       <span class="val${valClass}">${sign}${dashNum(v, cfg.dec)} <span class="unit">${cfg.unit}</span></span>
     </button>` + (DASH_CARD_DIVIDER_AFTER.has(key) ? '<hr class="dash-metric-divider">' : '');
@@ -158,7 +157,7 @@ async function buildDashboardYear(year) {
   if (!grid) return;
   grid.innerHTML = summaries.map((s, m) => renderDashCard(year, m, s)).join('');
 
-  // Hand the year's summaries to the compare layer (chips + trend charts).
+  // Hand the year's summaries to the month-over-month layer (chips + trend chart).
   _dashSummaries = summaries;
   renderDashCompare();
 }

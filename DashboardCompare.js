@@ -1,12 +1,14 @@
-// Historical Dashboard — cross-month metric comparison layer.
-// Metric registry, compare chips, 12-month trend charts (SVG, dependency-free),
-// table view, and month-card row highlighting.
+// Historical Dashboard — month-over-month metric layer.
+// Metric registry, metric chips, 12-month MoM bar chart (SVG, dependency-free),
+// and month-card row highlighting. Chart bars are clickable and open that
+// month's drill-down overlay at the matching metric view.
 // Requires: utils.js. Loaded before DashboardDetail.js and Dashboard.js.
 
 // ─── Metric registry ──────────────────────────────────────────────────
-// One entry per comparable metric; each key maps onto a fetchMonthSummary()
-// field. Adding a metric to the dashboard = adding one row here.
-// Cutting always leads with BILLABLE tons; receiving leads with counts.
+// One entry per metric; each key maps onto a fetchMonthSummary() field.
+// Adding a metric to the dashboard = adding one row here.
+// Cutting shows BILLABLE tons only (raw torch cuts stay in the month
+// drill-down, where they matter for billable-vs-actual comparison).
 const DASH_METRICS = [
   { key: 'consumedTons', label: 'Consumed',          unit: 'tons',     dec: 0 },
   { key: 'totalHeats',   label: 'Heats',             unit: 'heats',    dec: 0 },
@@ -14,7 +16,6 @@ const DASH_METRICS = [
   { key: 'buckets',      label: 'Buckets Loaded',    unit: 'buckets',  dec: 0 },
   { key: 'brokenTons',   label: 'Broken',            unit: 'tons',     dec: 0 },
   { key: 'billableTons', label: 'Cut — Billable',    unit: 'tons',     dec: 0 },
-  { key: 'cuts',         label: 'Torch Cuts',        unit: 'cuts',     dec: 0 },
   { key: 'receivedTons', label: 'Received (Total)',  unit: 'tons',     dec: 0 },
   { key: 'truckCount',   label: 'Trucks Received',   unit: 'trucks',   dec: 0 },
   { key: 'railcarCount', label: 'Railcars Received', unit: 'cars',     dec: 0 },
@@ -27,16 +28,27 @@ function dashMetricByKey(key) {
   return DASH_METRICS.find(m => m.key === key) || null;
 }
 
+// Which drill-down view a MoM chart bar opens for each metric.
+// Received-family metrics land on the Truck/Railcar viewers; Heats lands
+// on the heat viewer.
+const DASH_DRILL_METRIC = {
+  consumedTons: 'consumed', avgDailyTons: 'consumed', buckets: 'consumed',
+  totalHeats: 'heats',
+  brokenTons: 'broken', billableTons: 'billable',
+  receivedTons: 'received', truckCount: 'received', railcarCount: 'received',
+  truckTons: 'received', railTons: 'received',
+  netChange: 'consumed',
+};
+
 // Rows shown on each month card, in order; dividers group related metrics.
 const DASH_CARD_ROWS = ['consumedTons', 'avgDailyTons', 'totalHeats', 'brokenTons', 'billableTons', 'receivedTons', 'truckCount', 'railcarCount', 'netChange'];
 const DASH_CARD_DIVIDER_AFTER = new Set(['totalHeats', 'billableTons', 'railcarCount']);
 
 const DASH_MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-// ─── Compare state ─────────────────────────────────────────────────────
-let _dashSummaries = [];                 // 12 month summaries for the displayed year (set by buildDashboardYear)
-let _dashSelected = ['consumedTons'];    // up to 2 selected metric keys
-let _dashTableView = false;
+// ─── Metric selection state ────────────────────────────────────────────
+let _dashSummaries = [];              // 12 month summaries for the displayed year (set by buildDashboardYear)
+let _dashMetric = 'consumedTons';     // selected metric key (null = none)
 
 function dashNum(val, dec = 0) {
   return (typeof val === 'number' && isFinite(val))
@@ -61,7 +73,7 @@ function dashRoundedBar(x, y, w, h, r) {
   return `M${x} ${yb} L${x} ${y + rr} Q${x} ${y} ${x + rr} ${y} L${x + w - rr} ${y} Q${x + w} ${y} ${x + w} ${y + rr} L${x + w} ${yb} Z`;
 }
 
-function dashBarChart({ values, color, height = 150, dec = 0, unit = '', labelEvery = 1 }) {
+function dashBarChart({ values, color, height = 150, dec = 0, unit = '', labelEvery = 1, clickable = false }) {
   const W = 760, H = height, padL = 6, padR = 6, padT = 18;
   const n = values.length;
   const nums = values.map(v => v.value).filter(v => v !== null && isFinite(v));
@@ -99,10 +111,11 @@ function dashBarChart({ values, color, height = 150, dec = 0, unit = '', labelEv
     if (i % labelEvery === 0) {
       labels += `<text x="${cx + barW / 2}" y="${H - 4}" text-anchor="middle" font-size="10" fill="#64748b" font-family="inherit">${esc(v.axis)}</text>`;
     }
+    const canClick = clickable && v.value !== null;
     const tipHtml = v.value === null
       ? `<div class="tip-head">${esc(v.label)}</div><div class="tip-mut">No data</div>`
-      : `<div class="tip-head">${esc(v.label)}</div><div><b>${dashNum(v.value, dec)}</b> <span class="tip-mut">${esc(unit)}</span></div>${v.sub ? `<div class="tip-mut">${esc(v.sub)}</div>` : ''}`;
-    hits += `<rect class="dash-hit" data-tip="${dashEscAttr(tipHtml)}" x="${padL + band * i}" y="0" width="${band}" height="${H}" fill="transparent"/>`;
+      : `<div class="tip-head">${esc(v.label)}</div><div><b>${dashNum(v.value, dec)}</b> <span class="tip-mut">${esc(unit)}</span></div>${v.sub ? `<div class="tip-mut">${esc(v.sub)}</div>` : ''}${canClick ? '<div class="tip-mut">Click to open month</div>' : ''}`;
+    hits += `<rect class="dash-hit${canClick ? ' dash-hit-click' : ''}"${canClick ? ` data-mi="${i}"` : ''} data-tip="${dashEscAttr(tipHtml)}" x="${padL + band * i}" y="0" width="${band}" height="${H}" fill="transparent"${canClick ? ' style="cursor:pointer"' : ''}/>`;
   });
 
   const baseline = `<line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" stroke="#475569" stroke-width="1"/>`;
@@ -130,29 +143,23 @@ document.addEventListener('mousemove', e => {
   _dashTip.style.top = y + 'px';
 });
 
-// ─── Compare rendering ─────────────────────────────────────────────────
+// ─── Month-over-month rendering ────────────────────────────────────────
 function toggleDashMetric(key) {
   if (!dashMetricByKey(key)) return;
-  const i = _dashSelected.indexOf(key);
-  if (i >= 0) _dashSelected.splice(i, 1);
-  else {
-    _dashSelected.push(key);
-    if (_dashSelected.length > 2) _dashSelected.shift();
-  }
+  _dashMetric = _dashMetric === key ? null : key;
   renderDashCompare();
 }
 
 function renderDashChips() {
   const chips = document.getElementById('dashChips');
   if (!chips) return;
-  chips.innerHTML = DASH_METRICS.map(m => {
-    const slot = _dashSelected.indexOf(m.key);
-    return `<button type="button" class="dash-chip${slot === 0 ? ' on1' : slot === 1 ? ' on2' : ''}" data-key="${m.key}"><span class="dot"></span>${m.label}</button>`;
-  }).join('');
+  chips.innerHTML = DASH_METRICS.map(m =>
+    `<button type="button" class="dash-chip${m.key === _dashMetric ? ' on1' : ''}" data-key="${m.key}"><span class="dot"></span>${m.label}</button>`
+  ).join('');
   const clear = document.getElementById('dashClearSel');
-  if (clear) clear.style.display = _dashSelected.length ? '' : 'none';
+  if (clear) clear.style.display = _dashMetric ? '' : 'none';
   const hint = document.getElementById('dashCompareHint');
-  if (hint) hint.style.display = _dashSelected.length ? 'none' : '';
+  if (hint) hint.style.display = _dashMetric ? 'none' : '';
 }
 
 // Values for one metric across the 12 months of the displayed year,
@@ -187,79 +194,46 @@ function dashMonthValues(key) {
 function renderDashTrend() {
   const el = document.getElementById('dashTrend');
   if (!el) return;
-  if (!_dashSelected.length || !_dashSummaries.length) {
+  if (!_dashMetric || !_dashSummaries.length) {
     el.style.display = 'none';
     el.innerHTML = '';
     return;
   }
   el.style.display = 'block';
 
-  if (_dashTableView) {
-    const cols = _dashSelected.map(dashMetricByKey);
-    const head = `<tr><th>Month</th>${cols.map(c => `<th>${c.label} (${c.unit})</th><th>&Delta; MoM</th>`).join('')}</tr>`;
-    const rows = _dashSummaries.map((s, i) => {
-      const { year: curY, month: curM } = getCurrentInventoryPeriod();
-      const isCur = _dashYear === curY && i === curM;
-      if (!s) return `<tr><td>${DASH_MON3[i]}</td>${cols.map(() => '<td class="dash-delta-nil">—</td><td class="dash-delta-nil">—</td>').join('')}</tr>`;
-      return `<tr><td>${DASH_MON3[i]}${isCur ? ' ●' : ''}</td>` + cols.map(c => {
-        const v = s[c.key];
-        let p = i - 1;
-        while (p >= 0 && (!_dashSummaries[p] || _dashSummaries[p][c.key] == null)) p--;
-        const pv = (p >= 0 && _dashSummaries[p]) ? _dashSummaries[p][c.key] : null;
-        const d = pv ? (v - pv) / Math.abs(pv) * 100 : null;
-        const dCls = d === null ? 'dash-delta-nil' : d >= 0 ? 'dash-delta-up' : 'dash-delta-dn';
-        return `<td>${dashNum(v, c.dec)}</td><td class="${dCls}">${d === null ? '—' : (d >= 0 ? '+' : '') + d.toFixed(1) + '%'}</td>`;
-      }).join('') + '</tr>';
-    }).join('');
+  const cfg = dashMetricByKey(_dashMetric);
+  const vals = dashMonthValues(_dashMetric);
+  const nums = vals.filter(v => v.value !== null);
+  const color = '#3987e5';
+  if (!nums.length) {
     el.innerHTML = `<div class="dash-trend-card">
-      <div class="dash-trend-head"><span class="dash-trend-title">12-Month Comparison</span>
-      <button type="button" class="dash-tv-toggle" id="dashTvBtn">Chart view</button></div>
-      <div id="dashTrendTableWrap"><table>${head}${rows}</table></div></div>`;
-  } else {
-    el.innerHTML = _dashSelected.map((key, slot) => {
-      const cfg = dashMetricByKey(key);
-      const vals = dashMonthValues(key);
-      const nums = vals.filter(v => v.value !== null);
-      const color = slot === 0 ? '#3987e5' : '#c98500';
-      if (!nums.length) {
-        return `<div class="dash-trend-card">
-          <div class="dash-trend-head"><span class="dash-trend-title"><span class="swatch" style="background:${color}"></span>${cfg.label} — ${_dashYear}</span></div>
-          <div style="color:#64748b;font-size:12px;padding:10px 0">No data for ${_dashYear}.</div></div>`;
-      }
-      const total = nums.reduce((s, v) => s + v.value, 0);
-      const avg = total / nums.length;
-      const hi = nums.reduce((a, b) => (b.value > a.value ? b : a), nums[0]);
-      const lo = nums.reduce((a, b) => (b.value < a.value ? b : a), nums[0]);
-      return `<div class="dash-trend-card">
-        <div class="dash-trend-head">
-          <span class="dash-trend-title"><span class="swatch" style="background:${color}"></span>${cfg.label} — ${_dashYear} <span style="color:#64748b;font-weight:400;text-transform:none">(${cfg.unit})</span></span>
-          <span class="dash-trend-stats">
-            ${cfg.noTotal ? '' : `<span>Total <b>${dashNum(total, cfg.dec)}</b></span>`}
-            <span>Monthly avg <b>${dashNum(avg, cfg.dec)}</b></span>
-            <span>High <b>${hi.axis} · ${dashNum(hi.value, cfg.dec)}</b></span>
-            <span>Low <b>${lo.axis} · ${dashNum(lo.value, cfg.dec)}</b></span>
-            ${slot === 0 ? '<button type="button" class="dash-tv-toggle" id="dashTvBtn">Table view</button>' : ''}
-          </span>
-        </div>
-        ${dashBarChart({ values: vals, color, dec: cfg.dec, unit: cfg.unit })}
-      </div>`;
-    }).join('');
+      <div class="dash-trend-head"><span class="dash-trend-title"><span class="swatch" style="background:${color}"></span>${cfg.label} — ${_dashYear}</span></div>
+      <div style="color:#64748b;font-size:12px;padding:10px 0">No data for ${_dashYear}.</div></div>`;
+    return;
   }
-
-  const tv = document.getElementById('dashTvBtn');
-  if (tv) tv.addEventListener('click', () => {
-    _dashTableView = !_dashTableView;
-    renderDashTrend();
-  });
+  const total = nums.reduce((s, v) => s + v.value, 0);
+  const avg = total / nums.length;
+  const hi = nums.reduce((a, b) => (b.value > a.value ? b : a), nums[0]);
+  const lo = nums.reduce((a, b) => (b.value < a.value ? b : a), nums[0]);
+  el.innerHTML = `<div class="dash-trend-card">
+    <div class="dash-trend-head">
+      <span class="dash-trend-title"><span class="swatch" style="background:${color}"></span>${cfg.label} — ${_dashYear} <span style="color:#64748b;font-weight:400;text-transform:none">(${cfg.unit})</span></span>
+      <span class="dash-trend-stats">
+        ${cfg.noTotal ? '' : `<span>Total <b>${dashNum(total, cfg.dec)}</b></span>`}
+        <span>Monthly avg <b>${dashNum(avg, cfg.dec)}</b></span>
+        <span>High <b>${hi.axis} · ${dashNum(hi.value, cfg.dec)}</b></span>
+        <span>Low <b>${lo.axis} · ${dashNum(lo.value, cfg.dec)}</b></span>
+      </span>
+    </div>
+    ${dashBarChart({ values: vals, color, dec: cfg.dec, unit: cfg.unit, clickable: true })}
+  </div>`;
 }
 
 // Re-applies selection highlight classes to the month-card metric rows
 // without rebuilding the grid.
 function applyDashCardHighlights() {
   document.querySelectorAll('#dashGrid .dash-mrow').forEach(btn => {
-    const slot = _dashSelected.indexOf(btn.getAttribute('data-key'));
-    btn.classList.toggle('sel1', slot === 0);
-    btn.classList.toggle('sel2', slot === 1);
+    btn.classList.toggle('sel1', btn.getAttribute('data-key') === _dashMetric);
   });
 }
 
@@ -274,11 +248,22 @@ document.getElementById('dashCompareBar')?.addEventListener('click', e => {
   const chip = e.target.closest('.dash-chip');
   if (!chip) return;
   if (chip.id === 'dashClearSel') {
-    _dashSelected = [];
+    _dashMetric = null;
     renderDashCompare();
     return;
   }
   toggleDashMetric(chip.getAttribute('data-key'));
+});
+
+// Clicking a bar in the MoM chart drills into that month, landing on the
+// view that matches the selected metric (e.g. Received → Truck/Railcar
+// viewers, Heats → heat viewer).
+document.getElementById('dashTrend')?.addEventListener('click', e => {
+  const hit = e.target.closest ? e.target.closest('.dash-hit-click') : null;
+  if (!hit || !_dashMetric) return;
+  const mi = Number(hit.getAttribute('data-mi'));
+  if (!Number.isInteger(mi) || !_dashSummaries[mi]) return;
+  openDashMonth(_dashYear, mi, DASH_DRILL_METRIC[_dashMetric] || 'consumed');
 });
 
 document.getElementById('dashGrid')?.addEventListener('click', e => {

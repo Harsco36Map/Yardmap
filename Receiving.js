@@ -250,6 +250,7 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
           truckNumber,
           ticketId,
           pile,
+          lot,
           material: getMaterialForLotOrPile(lot, pile),
           isStoppedPile: isStoppedPileCode(pile),
           remarks,

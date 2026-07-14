@@ -236,7 +236,7 @@
             border-top: 1px solid #334155;
         }
 
-        /* Compare bar (metric chips) */
+        /* Metric bar (metric chips) */
         #dashCompareBar {
             display: flex;
             align-items: center;
@@ -258,13 +258,11 @@
         .dash-chip .dot { width: 8px; height: 8px; border-radius: 50%; display: none; }
         .dash-chip.on1 { border-color: #3987e5; color: #e2e8f0; background: rgba(57,135,229,0.13); }
         .dash-chip.on1 .dot { display: inline-block; background: #3987e5; }
-        .dash-chip.on2 { border-color: #c98500; color: #e2e8f0; background: rgba(201,133,0,0.13); }
-        .dash-chip.on2 .dot { display: inline-block; background: #c98500; }
         .dash-chip.sm { padding: 2px 10px; font-size: 11px; }
         #dashClearSel { border-style: dashed; display: none; }
         #dashCompareHint { font-size: 11px; color: #64748b; margin-left: 4px; }
 
-        /* Trend panel (12-month charts / table view) */
+        /* Trend panel (12-month MoM chart) */
         #dashTrend { padding: 10px 20px 0 20px; display: none; }
         .dash-trend-card {
             background: #1e293b; border: 1px solid #334155; border-radius: 8px;
@@ -282,22 +280,6 @@
         .dash-trend-stats { display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px; color: #94a3b8; }
         .dash-trend-stats b { color: #e2e8f0; font-variant-numeric: tabular-nums; }
         .dash-chart-box svg { display: block; width: 100%; height: auto; }
-        .dash-tv-toggle {
-            background: none; border: 1px solid #334155; color: #94a3b8;
-            border-radius: 4px; padding: 3px 10px; font-size: 11px; cursor: pointer; font-family: inherit;
-        }
-        .dash-tv-toggle:hover { color: #e2e8f0; border-color: #475569; }
-        #dashTrendTableWrap { overflow-x: auto; }
-        #dashTrendTableWrap table { border-collapse: collapse; width: 100%; font-size: 12px; }
-        #dashTrendTableWrap th, #dashTrendTableWrap td {
-            padding: 5px 10px; text-align: right; border-bottom: 1px solid #334155;
-            font-variant-numeric: tabular-nums;
-        }
-        #dashTrendTableWrap th { color: #64748b; font-weight: 600; }
-        #dashTrendTableWrap td:first-child, #dashTrendTableWrap th:first-child { text-align: left; }
-        .dash-delta-up { color: #22c55e; }
-        .dash-delta-dn { color: #f87171; }
-        .dash-delta-nil { color: #64748b; }
 
         /* Month card: clickable title + selectable metric rows */
         .dash-card-title-btn {
@@ -330,7 +312,6 @@
         .dash-mrow .val.pos { color: #22c55e; }
         .dash-mrow .val.neg { color: #f87171; }
         .dash-mrow.sel1 { background: rgba(57,135,229,0.13); box-shadow: inset 2px 0 0 #3987e5; }
-        .dash-mrow.sel2 { background: rgba(201,133,0,0.13); box-shadow: inset 2px 0 0 #c98500; }
 
         /* Chart tooltip */
         #dashTip {
@@ -403,11 +384,18 @@
         .dash-tbl-wrap td:first-child { text-align: left; white-space: nowrap; }
         .dash-tbl-wrap tr.total-row td { background: #24334a; font-weight: 700; }
         .dash-wk { display: inline-block; min-width: 13px; font-weight: 700; margin-right: 6px; }
-        .dash-heat-btn {
+        .dash-heat-btn, .dash-truck-btn {
             background: none; border: none; color: #3987e5; text-decoration: underline;
             cursor: pointer; padding: 0; font: inherit; font-variant-numeric: tabular-nums;
         }
-        .dash-heat-btn.active { color: #c98500; font-weight: 700; }
+        .dash-heat-btn.active, .dash-truck-btn.active { color: #c98500; font-weight: 700; }
+
+        /* Charge-bucket badge (heat viewers on dashboard + yardmap popups) */
+        .bkt-badge {
+            display: inline-block; min-width: 20px; padding: 1px 5px; border-radius: 3px;
+            font-size: 10px; font-weight: 700; color: #fff; text-align: center;
+            line-height: 1.4; letter-spacing: 0.03em;
+        }
         tr.dash-detail > td { background: #182238; padding: 10px 12px; }
         .dash-heat-tbl {
             width: 100%; border-collapse: collapse; font-size: 12px;
@@ -459,10 +447,10 @@
             <button id="dashBackBtn">&#8592; Back to Map</button>
         </div>
         <div id="dashCompareBar">
-            <span class="cb-label">Compare</span>
+            <span class="cb-label">Metrics</span>
             <span id="dashChips"></span>
             <button type="button" class="dash-chip" id="dashClearSel">Clear &times;</button>
-            <span id="dashCompareHint">Pick up to two metrics &mdash; or click any row on a month card.</span>
+            <span id="dashCompareHint">Pick a metric to see it month over month &mdash; then click a bar to open that month.</span>
         </div>
         <div id="dashTrend"></div>
         <div id="dashGrid"></div>

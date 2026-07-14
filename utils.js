@@ -399,6 +399,26 @@ function getMaterialForLotOrPile(lot, pile) {
   return '';
 }
 
+// ─── Charge bucket helpers (Consumption4 heat viewers) ────────────────
+// Distinct color per charge bucket within a heat, readable on light and dark
+// backgrounds as a filled badge with white text.
+const BUCKET_SEQ_COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#a855f7', '#06b6d4', '#f97316', '#84cc16'];
+
+function bucketColorForSeq(seq) {
+  if (!Number.isFinite(seq) || seq < 1) return '';
+  return BUCKET_SEQ_COLORS[(seq - 1) % BUCKET_SEQ_COLORS.length];
+}
+
+// Small colored badge identifying which charge bucket a material entry was
+// loaded into. Old-format rows have no bucket info → muted dash.
+function bucketBadgeHtml(mat) {
+  const seq = mat && mat.bucketSeq;
+  if (!Number.isFinite(seq)) return '<span style="color:#94a3b8">—</span>';
+  const color = bucketColorForSeq(seq);
+  const title = mat.bucketNumber ? `Charge bucket ${seq} · Bucket #${mat.bucketNumber}` : `Charge bucket ${seq}`;
+  return `<span class="bkt-badge" style="background:${color}" title="${esc(title)}">B${seq}</span>`;
+}
+
 // ─── Inventory status helpers ─────────────────────────────────────────
 // MM/DD/YYYY → Date
 function parseMDY(dateStr) {
