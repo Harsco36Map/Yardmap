@@ -85,7 +85,7 @@
   {"type":"Other","name":"730","lat":40.7930050855626,"lng":-82.53578507521118},
   {"type":"Other","name":"931","lat":40.79333355737725,"lng":-82.53572143614294},
   {"type":"Other","name":"17F Delta Rings","lat":40.79379958368974,"lng":-82.53859207034112},
-  {"type":"Other","name":"95J 446 Home Coils","lat":40.79283962651921,"lng":-82.53571535581594},
+  {"type":"Other","name":"180-21 Slabs","lat":40.7941986686334,"lng":-82.5386241328656},
 {"type":"Breaking","name":"17Y WorkRolls"},
   {"type":"Unbreakable","name":"17X Workrolls Unbreakable"},
   {"type":"Unbreakable","name":"17Z Workrolls Unbreakable"},
@@ -126,4 +126,5 @@
   {"type":"Coils","name":"81C 151 Home"},
   {"type":"Coils","name":"94C 436St"},
   {"type":"Coils","name":"95C 436 Home"},
+  {"type":"Coils","name":"95J 446 Home"},
 {"type":"Other","name":"Rejected 430 #H77977","lat":40.79406863878592,"lng":-82.53815352916719}]
