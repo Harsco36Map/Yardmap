@@ -122,7 +122,7 @@ let _dashAvailableYears = [];
 async function discoverDashboardYears() {
   try {
     const [rx, burn] = await Promise.all([
-      discoverHistoryMonths('Receiving1'),
+      discoverHistoryMonths('Receiving'),
       discoverHistoryMonthsForYearlySheet('BurningHistory'),
     ]);
     const yearSet = new Set();

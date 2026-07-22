@@ -1301,8 +1301,8 @@ window.addEventListener("error", e => console.error("Error:", e.message));
 (async () => {
   try {
     const [rx, bk, burn, brk] = await Promise.all([
-      discoverHistoryMonths('Receiving1'),
-      discoverHistoryMonths('Consumption1'),
+      discoverHistoryMonths('Receiving'),
+      discoverHistoryMonths('Consumption'),
       discoverHistoryMonthsForYearlySheet('BurningHistory'),
       discoverHistoryMonthsForYearlySheet('BreakingHistory')
     ]);

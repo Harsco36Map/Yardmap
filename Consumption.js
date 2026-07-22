@@ -41,13 +41,47 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
   };
 
   const workbook = periodOverride ? await loadHistoryWorkbook(force) : await loadTotalsWorkbook(force);
-  const sheet = findSheetByName(workbook, historySheetName('Consumption1', periodOverride));
-  if (!sheet) {
-    console.warn('Consumption1 sheet not found');
-    return null;
-  }
 
-  const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+  // Prefer the raw single "Consumption" tab (one row per bucket-load event) when present —
+  // it's aggregated here in JS via buildConsumptionTabsFromRaw (utils.js), mirroring
+  // Calculators/LoadingCalculator.py. Falls back to the old Consumption1-4 tabs otherwise,
+  // so History.xlsx keeps working until it's converted to the same raw format.
+  const rawConsumptionSheet = findSheetByName(workbook, historySheetName('Consumption', periodOverride));
+  let data;
+  let syntheticTabs = null;
+  if (rawConsumptionSheet) {
+    const period = periodOverride || getCurrentInventoryPeriod();
+    const currentRawRows = window.XLSX.utils.sheet_to_json(rawConsumptionSheet, { header: 1, raw: true, defval: '' });
+
+    // Total_Lbs/Total_Tons (and the pile breakdowns) stay strictly 1:1 with this month's
+    // own raw rows — no cross-month reattribution. Only Buckets_Loaded/Heats_Loaded and
+    // the heat-viewer breakdown use cross-month de-duping (computeConsumptionHeatDedup):
+    // a heat only counts as "completed" once its sequence # stops appearing in later
+    // data, even if that later data falls in the next month.
+    syntheticTabs = buildConsumptionTabsFromRaw(currentRawRows);
+
+    const [prevRawRows, nextRawRows] = await Promise.all([
+      fetchRawConsumptionRowsForPeriod(shiftMonthPeriod(period, -1)),
+      fetchRawConsumptionRowsForPeriod(shiftMonthPeriod(period, 1))
+    ]);
+    const dedup = computeConsumptionHeatDedup(period, currentRawRows, prevRawRows, nextRawRows);
+
+    syntheticTabs.consumption1 = syntheticTabs.consumption1.map((row, idx) => {
+      if (idx === 0) return row; // header
+      const iso = row[0];
+      return [row[0], row[1], row[2], dedup.dailyBuckets.get(iso) || 0, dedup.dailyHeats.get(iso) || 0];
+    });
+    syntheticTabs.consumption4 = dedup.consumption4;
+
+    data = syntheticTabs.consumption1;
+  } else {
+    const sheet = findSheetByName(workbook, historySheetName('Consumption1', periodOverride));
+    if (!sheet) {
+      console.warn('Consumption1 sheet not found');
+      return null;
+    }
+    data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+  }
   if (!Array.isArray(data) || data.length < 2) {
     console.warn('Consumption1 sheet has insufficient data');
     return null;
@@ -91,9 +125,16 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
   // Lot/pile → material name translation lives in utils.js (getMaterialForLotOrPile),
   // which checks stockIndexGlobal by lot code, then by pile, then marker names.
 
-  const consumption2 = findSheetByName(workbook, historySheetName('Consumption2', periodOverride));
-  if (consumption2) {
-    const data2 = window.XLSX.utils.sheet_to_json(consumption2, { header: 1, raw: false });
+  let data2 = null;
+  if (syntheticTabs) {
+    data2 = syntheticTabs.consumption2;
+  } else {
+    const consumption2 = findSheetByName(workbook, historySheetName('Consumption2', periodOverride));
+    if (consumption2) {
+      data2 = window.XLSX.utils.sheet_to_json(consumption2, { header: 1, raw: false });
+    }
+  }
+  {
     if (Array.isArray(data2) && data2.length >= 2) {
       const header2 = Array.isArray(data2[0]) ? data2[0] : [];
       const header2Norm = header2.map(h => String(h || '').trim().toLowerCase().replace(/_/g, ' '));
@@ -189,9 +230,16 @@ async function fetchBucketLoadingConsumption(force = false, periodOverride = nul
 
   // ---- Consumption4: heat-level material breakdown ----
   const heatBreakdownByIsoDate = {};
-  const consumption4 = findSheetByName(workbook, historySheetName('Consumption4', periodOverride));
-  if (consumption4) {
-    const data4 = window.XLSX.utils.sheet_to_json(consumption4, { header: 1, raw: false });
+  let data4 = null;
+  if (syntheticTabs) {
+    data4 = syntheticTabs.consumption4;
+  } else {
+    const consumption4 = findSheetByName(workbook, historySheetName('Consumption4', periodOverride));
+    if (consumption4) {
+      data4 = window.XLSX.utils.sheet_to_json(consumption4, { header: 1, raw: false });
+    }
+  }
+  {
     if (Array.isArray(data4) && data4.length >= 2) {
       const header4 = Array.isArray(data4[0]) ? data4[0] : [];
       const header4Norm = header4.map(h => String(h || '').trim().toLowerCase().replace(/_/g, ' '));
@@ -522,7 +570,7 @@ function wireBucketLoadingPopupEvents(container, marker) {
       e.stopPropagation(); e.preventDefault();
       monthBtn.textContent = 'Loading…';
       monthBtn.disabled = true;
-      if (!bucketHistoryMonths) bucketHistoryMonths = await discoverHistoryMonths('Consumption1');
+      if (!bucketHistoryMonths) bucketHistoryMonths = await discoverHistoryMonths('Consumption');
       const payload = await fetchBucketLoadingConsumption(false, bucketCurrentPeriod);
       marker.setPopupContent(unescapeAngles(renderBucketLoadingPopup(payload)));
       setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireBucketLoadingPopupEvents(el, marker); }, 0);

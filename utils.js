@@ -306,6 +306,373 @@ function historySheetName(baseType, periodOverride) {
   return `${periodOverride.month + 1}-${periodOverride.year}${baseType}`;
 }
 
+// ─── Raw single-tab aggregation ────────────────────────────────────────
+// Mirrors the offline Python calculators (Calculators/LoadingCalculator.py and
+// Calculators/ReceivingCalculator.py) so Production.xlsx can ship one raw
+// "Consumption" / "Receiving" tab instead of pre-aggregated Consumption1-4 /
+// Receiving1-3 tabs. Column indices below match those scripts exactly.
+
+function excelSerialToDate(serial) {
+  const utcMs = Math.round((serial - 25569) * 86400 * 1000);
+  const d = new Date(utcMs);
+  return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+function rawCellToDateOnly(value) {
+  if (value instanceof Date && isFinite(value.getTime())) {
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  }
+  if (typeof value === 'number' && Number.isFinite(value) && value > 1000) {
+    return excelSerialToDate(value);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return parseXlsxDateCell(value);
+  }
+  return null;
+}
+
+function isoFromDateOnly(d) {
+  return (d instanceof Date && isFinite(d.getTime()))
+    ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    : '';
+}
+
+function rawNum(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s.replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+// Raw "Consumption" tab columns (0-based), same layout LoadingCalculator.py expects:
+//   0 heat_bucket ("031831/3"), 1 heat_type, 6 pile, 7 material lot, 9 consumed lbs, 10 date
+function buildConsumptionTabsFromRaw(rawRows) {
+  const LBS_PER_TON = 2000;
+  const bucketLastDate = new Map();
+  const heatLastDate = new Map();
+  const heatTypes = new Map();
+  const parsedRows = [];
+
+  (rawRows || []).forEach(row => {
+    if (!Array.isArray(row) || row.length < 11) return;
+    const heatBucket = String(row[0] ?? '').trim();
+    const rawHeatType = String(row[1] ?? '').trim();
+    const dateOnly = rawCellToDateOnly(row[10]);
+    if (!heatBucket || !dateOnly) return;
+
+    const iso = isoFromDateOnly(dateOnly);
+    const heatOnly = heatBucket.split('/')[0].trim();
+
+    if (rawHeatType && !heatTypes.has(heatOnly)) heatTypes.set(heatOnly, rawHeatType);
+    if (!bucketLastDate.has(heatBucket) || iso > bucketLastDate.get(heatBucket)) bucketLastDate.set(heatBucket, iso);
+    if (!heatLastDate.has(heatOnly) || iso > heatLastDate.get(heatOnly)) heatLastDate.set(heatOnly, iso);
+
+    parsedRows.push({
+      heatBucket, heatOnly, iso,
+      pile: String(row[6] ?? '').trim(),
+      lot: String(row[7] ?? '').trim(),
+      consumed: rawNum(row[9]),
+      bucketNumber: String(row[3] ?? '').trim()
+    });
+  });
+
+  const dailyTotals = new Map();
+  const pileDaily = new Map();
+  const pileDailyLots = new Map();
+  const pileGrand = new Map();
+  const pileGrandLots = new Map();
+  const dailyBuckets = new Map();
+  const dailyHeats = new Map();
+  const completedHeatRows = [];
+
+  parsedRows.forEach(r => {
+    if (r.consumed == null) return;
+    const { heatBucket, heatOnly, pile, lot, consumed, iso, bucketNumber } = r;
+
+    dailyTotals.set(iso, (dailyTotals.get(iso) || 0) + consumed);
+
+    if (pile) {
+      if (!pileDaily.has(iso)) pileDaily.set(iso, new Map());
+      const pd = pileDaily.get(iso);
+      pd.set(pile, (pd.get(pile) || 0) + consumed);
+      pileGrand.set(pile, (pileGrand.get(pile) || 0) + consumed);
+
+      if (lot) {
+        if (!pileDailyLots.has(iso)) pileDailyLots.set(iso, new Map());
+        const pdl = pileDailyLots.get(iso);
+        if (!pdl.has(pile)) pdl.set(pile, new Set());
+        pdl.get(pile).add(lot);
+
+        if (!pileGrandLots.has(pile)) pileGrandLots.set(pile, new Set());
+        pileGrandLots.get(pile).add(lot);
+      }
+    }
+
+    if (bucketLastDate.get(heatBucket) === iso) {
+      if (!dailyBuckets.has(iso)) dailyBuckets.set(iso, new Set());
+      dailyBuckets.get(iso).add(heatBucket);
+    }
+    if (heatLastDate.get(heatOnly) === iso) {
+      if (!dailyHeats.has(iso)) dailyHeats.set(iso, new Set());
+      dailyHeats.get(iso).add(heatOnly);
+    }
+
+    const completionDate = heatLastDate.get(heatOnly) || '';
+    if (completionDate && pile) {
+      completedHeatRows.push({
+        date: completionDate,
+        originalHeatBucket: heatBucket,
+        heatNumber: heatOnly,
+        bucketNumber,
+        heatType: heatTypes.get(heatOnly) || '',
+        pile,
+        lot,
+        lbs: consumed,
+        tons: consumed / LBS_PER_TON
+      });
+    }
+  });
+
+  const consumption1 = [['Date', 'Total_Lbs', 'Total_Tons', 'Buckets_Loaded', 'Heats_Loaded']];
+  Array.from(dailyTotals.keys()).sort().forEach(iso => {
+    const lbs = dailyTotals.get(iso);
+    consumption1.push([
+      iso,
+      Math.round(lbs),
+      Math.round((lbs / LBS_PER_TON) * 100) / 100,
+      dailyBuckets.has(iso) ? dailyBuckets.get(iso).size : 0,
+      dailyHeats.has(iso) ? dailyHeats.get(iso).size : 0
+    ]);
+  });
+
+  const consumption2 = [['Date', 'Pile_Number', 'Material_Lots', 'Total_Lbs', 'Total_Tons']];
+  Array.from(pileDaily.keys()).sort().forEach(iso => {
+    const pd = pileDaily.get(iso);
+    const pdl = pileDailyLots.get(iso) || new Map();
+    Array.from(pd.keys()).sort().forEach(pile => {
+      const lbs = pd.get(pile);
+      const lots = pdl.has(pile) ? Array.from(pdl.get(pile)).sort() : [];
+      consumption2.push([iso, pile, lots.join('; '), Math.round(lbs), Math.round((lbs / LBS_PER_TON) * 100) / 100]);
+    });
+  });
+
+  const consumption3 = [['Pile_Number', 'Material_Lots', 'Total_Lbs', 'Total_Tons']];
+  Array.from(pileGrand.keys()).sort().forEach(pile => {
+    const lbs = pileGrand.get(pile);
+    const lots = pileGrandLots.has(pile) ? Array.from(pileGrandLots.get(pile)).sort() : [];
+    consumption3.push([pile, lots.join('; '), Math.round(lbs), Math.round((lbs / LBS_PER_TON) * 100) / 100]);
+  });
+
+  const consumption4 = [['Date', 'Original_Heat_Bucket', 'Heat_Number', 'Bucket_Number', 'Heat_Type', 'Pile_Number', 'Material_Lots', 'Total_Lbs', 'Total_Tons']];
+  completedHeatRows
+    .slice()
+    .sort((a, b) =>
+      a.date.localeCompare(b.date) ||
+      a.heatNumber.localeCompare(b.heatNumber) ||
+      a.pile.localeCompare(b.pile) ||
+      a.lot.localeCompare(b.lot) ||
+      a.bucketNumber.localeCompare(b.bucketNumber)
+    )
+    .forEach(e => {
+      consumption4.push([e.date, e.originalHeatBucket, e.heatNumber, e.bucketNumber, e.heatType, e.pile, e.lot, Math.round(e.lbs), Math.round((e.lbs / LBS_PER_TON) * 100) / 100]);
+    });
+
+  return { consumption1, consumption2, consumption3, consumption4 };
+}
+
+function shiftMonthPeriod(period, delta) {
+  const total = period.year * 12 + period.month + delta;
+  return { year: Math.floor(total / 12), month: ((total % 12) + 12) % 12 };
+}
+
+// Fetches raw "Consumption" rows for an arbitrary month: the live workbook when the
+// period matches the current inventory period, otherwise the matching History.xlsx
+// sheet. Returns null when that month has no raw Consumption tab (e.g. no data yet
+// for a future month, or a month before History.xlsx's coverage starts).
+async function fetchRawConsumptionRowsForPeriod(period) {
+  const currentPeriod = getCurrentInventoryPeriod();
+  const isLive = period.year === currentPeriod.year && period.month === currentPeriod.month;
+  try {
+    const workbook = isLive ? await loadTotalsWorkbook() : await loadHistoryWorkbook();
+    const sheetName = isLive ? 'Consumption' : `${period.month + 1}-${period.year}Consumption`;
+    const sheet = findSheetByName(workbook, sheetName);
+    if (!sheet) return null;
+    return window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+  } catch (err) {
+    console.warn('fetchRawConsumptionRowsForPeriod failed:', err);
+    return null;
+  }
+}
+
+// Cross-month "final day" de-duping for heat/bucket completion. This is intentionally
+// independent of the daily Total_Lbs/Total_Tons figures — those must stay 1:1 with each
+// month's own raw rows (see buildConsumptionTabsFromRaw) since other on-site takeaways
+// depend on them. This function only decides:
+//   - which day a bucket/heat counts as "completed" (Buckets_Loaded/Heats_Loaded) — a
+//     heat only counts as done once its sequence # stops appearing in later data, even
+//     if that later data is in the next month
+//   - the full per-heat material breakdown for the heat viewer, grouped under that same
+//     true completion day, regardless of which month each individual bucket was charged in
+// `currentRows`/`prevRows`/`nextRows` all keep each row's true original date — nothing
+// gets re-dated or excluded from any month's own value totals.
+function computeConsumptionHeatDedup(period, currentRows, prevRows, nextRows) {
+  const allRows = [].concat(prevRows || [], currentRows || [], nextRows || []);
+
+  const bucketLastDate = new Map();
+  const heatLastDate = new Map();
+  const heatTypes = new Map();
+  const parsedAll = [];
+
+  allRows.forEach(row => {
+    if (!Array.isArray(row) || row.length < 11) return;
+    const heatBucket = String(row[0] ?? '').trim();
+    const rawHeatType = String(row[1] ?? '').trim();
+    const dateOnly = rawCellToDateOnly(row[10]);
+    if (!heatBucket || !dateOnly) return;
+    const iso = isoFromDateOnly(dateOnly);
+    const heatOnly = heatBucket.split('/')[0].trim();
+
+    if (rawHeatType && !heatTypes.has(heatOnly)) heatTypes.set(heatOnly, rawHeatType);
+    if (!bucketLastDate.has(heatBucket) || iso > bucketLastDate.get(heatBucket)) bucketLastDate.set(heatBucket, iso);
+    if (!heatLastDate.has(heatOnly) || iso > heatLastDate.get(heatOnly)) heatLastDate.set(heatOnly, iso);
+
+    parsedAll.push({
+      heatBucket, heatOnly, iso,
+      pile: String(row[6] ?? '').trim(),
+      lot: String(row[7] ?? '').trim(),
+      consumed: rawNum(row[9]),
+      bucketNumber: String(row[3] ?? '').trim()
+    });
+  });
+
+  const monthStart = `${period.year}-${String(period.month + 1).padStart(2, '0')}-01`;
+  const nextPeriod = shiftMonthPeriod(period, 1);
+  const monthEndExclusive = `${nextPeriod.year}-${String(nextPeriod.month + 1).padStart(2, '0')}-01`;
+  const inMonth = iso => iso >= monthStart && iso < monthEndExclusive;
+
+  const dailyBucketSets = new Map();
+  const dailyHeatSets = new Map();
+  const completedHeatRows = [];
+
+  parsedAll.forEach(r => {
+    if (r.consumed == null) return;
+    const { heatBucket, heatOnly, pile, lot, consumed, bucketNumber } = r;
+
+    const bucketFinalIso = bucketLastDate.get(heatBucket);
+    if (bucketFinalIso && inMonth(bucketFinalIso)) {
+      if (!dailyBucketSets.has(bucketFinalIso)) dailyBucketSets.set(bucketFinalIso, new Set());
+      dailyBucketSets.get(bucketFinalIso).add(heatBucket);
+    }
+
+    const heatFinalIso = heatLastDate.get(heatOnly);
+    if (heatFinalIso && inMonth(heatFinalIso)) {
+      if (!dailyHeatSets.has(heatFinalIso)) dailyHeatSets.set(heatFinalIso, new Set());
+      dailyHeatSets.get(heatFinalIso).add(heatOnly);
+
+      if (pile) {
+        completedHeatRows.push({
+          date: heatFinalIso,
+          originalHeatBucket: heatBucket,
+          heatNumber: heatOnly,
+          bucketNumber,
+          heatType: heatTypes.get(heatOnly) || '',
+          pile,
+          lot,
+          lbs: consumed,
+          tons: consumed / 2000
+        });
+      }
+    }
+  });
+
+  const dailyBuckets = new Map();
+  dailyBucketSets.forEach((set, iso) => dailyBuckets.set(iso, set.size));
+  const dailyHeats = new Map();
+  dailyHeatSets.forEach((set, iso) => dailyHeats.set(iso, set.size));
+
+  const consumption4 = [['Date', 'Original_Heat_Bucket', 'Heat_Number', 'Bucket_Number', 'Heat_Type', 'Pile_Number', 'Material_Lots', 'Total_Lbs', 'Total_Tons']];
+  completedHeatRows
+    .slice()
+    .sort((a, b) =>
+      a.date.localeCompare(b.date) ||
+      a.heatNumber.localeCompare(b.heatNumber) ||
+      a.pile.localeCompare(b.pile) ||
+      a.lot.localeCompare(b.lot) ||
+      a.bucketNumber.localeCompare(b.bucketNumber)
+    )
+    .forEach(e => {
+      consumption4.push([e.date, e.originalHeatBucket, e.heatNumber, e.bucketNumber, e.heatType, e.pile, e.lot, Math.round(e.lbs), Math.round((e.lbs / 2000) * 100) / 100]);
+    });
+
+  return { dailyBuckets, dailyHeats, consumption4 };
+}
+
+// Raw "Receiving" tab columns (0-based), same layout ReceivingCalculator.py expects:
+//   0 truck#, 6 ticket, 7 railcar-flag (blank ⇒ drop row), 8 material lot, 9 pile,
+//   11 remarks, 16 date, 20 gross, 21 tare, 22 net
+function buildReceivingTabsFromRaw(rawRows) {
+  const COL_TRUCK = 0, COL_TICKET = 6, COL_RAILCAR = 7, COL_MATERIAL_LOT = 8,
+        COL_PILE = 9, COL_REMARKS = 11, COL_DATE = 16, COL_GROSS = 20, COL_TARE = 21, COL_NET = 22;
+
+  const dailySummary = new Map();
+  const dailyPileLotSummary = new Map();
+  const detailRows = [];
+
+  (rawRows || []).forEach(row => {
+    if (!Array.isArray(row) || row.length <= COL_NET) return;
+
+    if (!String(row[COL_RAILCAR] ?? '').trim()) return; // blank ⇒ railcar row, drop
+    const pile = String(row[COL_PILE] ?? '').trim();
+    if (!pile) return; // voided ticket
+
+    const dateOnly = rawCellToDateOnly(row[COL_DATE]);
+    const net = rawNum(row[COL_NET]);
+    if (!dateOnly || net == null) return;
+    const iso = isoFromDateOnly(dateOnly);
+
+    const truck = String(row[COL_TRUCK] ?? '').trim();
+    const ticket = String(row[COL_TICKET] ?? '').trim();
+    const materialLot = String(row[COL_MATERIAL_LOT] ?? '').trim();
+    const remarks = String(row[COL_REMARKS] ?? '').trim();
+    const gross = rawNum(row[COL_GROSS]);
+    const tare = rawNum(row[COL_TARE]);
+
+    if (!dailySummary.has(iso)) dailySummary.set(iso, { trucks: 0, weight: 0 });
+    const ds = dailySummary.get(iso);
+    ds.trucks += 1;
+    ds.weight += net;
+
+    const plKey = [iso, pile, materialLot].join('|');
+    dailyPileLotSummary.set(plKey, (dailyPileLotSummary.get(plKey) || 0) + net);
+
+    detailRows.push({ iso, truck, ticket, pile, materialLot, remarks, gross, tare, net });
+  });
+
+  const receiving1 = [['Date', 'Total Trucks Received', 'Total Net Weight Received']];
+  Array.from(dailySummary.keys()).sort().forEach(iso => {
+    const ds = dailySummary.get(iso);
+    receiving1.push([iso, ds.trucks, Math.round(ds.weight)]);
+  });
+
+  const receiving2 = [['Date', 'Pile Number', 'Material Lot #', 'Total Weight']];
+  Array.from(dailyPileLotSummary.keys()).sort().forEach(key => {
+    const [iso, pile, lot] = key.split('|');
+    receiving2.push([iso, pile, lot, Math.round(dailyPileLotSummary.get(key))]);
+  });
+
+  const receiving3 = [['Truck #', 'Ticket ID', 'Pile #', 'Date', 'Material Lot #', 'Remarks', 'Gross Weight', 'Tare Weight', 'Net Weight']];
+  detailRows
+    .slice()
+    .sort((a, b) => a.iso.localeCompare(b.iso) || a.pile.localeCompare(b.pile) || a.materialLot.localeCompare(b.materialLot))
+    .forEach(d => {
+      receiving3.push([d.truck, d.ticket, d.pile, d.iso, d.materialLot, d.remarks, d.gross != null ? Math.round(d.gross) : '', d.tare != null ? Math.round(d.tare) : '', Math.round(d.net)]);
+    });
+
+  return { receiving1, receiving2, receiving3 };
+}
+
 // ─── Pile / marker helpers ────────────────────────────────────────────
 // Leading alphanumerics (e.g., "62U" from "62U Unbreakable")
 function extractPileCode(name) {

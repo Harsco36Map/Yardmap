@@ -40,13 +40,26 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
   };
 
   const workbook = periodOverride ? await loadHistoryWorkbook(force) : await loadTotalsWorkbook(force);
-  const sheet = findSheetByName(workbook, historySheetName('Receiving1', periodOverride));
-  if (!sheet) {
-    console.warn('Receiving1 sheet not found');
-    return null;
-  }
 
-  const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+  // Prefer the raw single "Receiving" tab (one row per truck ticket) when present —
+  // it's aggregated here in JS via buildReceivingTabsFromRaw (utils.js), mirroring
+  // Calculators/ReceivingCalculator.py. Falls back to the old Receiving1-3 tabs otherwise,
+  // so History.xlsx keeps working until it's converted to the same raw format.
+  const rawReceivingSheet = findSheetByName(workbook, historySheetName('Receiving', periodOverride));
+  let data;
+  let syntheticTabs = null;
+  if (rawReceivingSheet) {
+    const rawRows = window.XLSX.utils.sheet_to_json(rawReceivingSheet, { header: 1, raw: true, defval: '' });
+    syntheticTabs = buildReceivingTabsFromRaw(rawRows);
+    data = syntheticTabs.receiving1;
+  } else {
+    const sheet = findSheetByName(workbook, historySheetName('Receiving1', periodOverride));
+    if (!sheet) {
+      console.warn('Receiving1 sheet not found');
+      return null;
+    }
+    data = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+  }
   if (!Array.isArray(data) || data.length < 1) {
     console.warn('Receiving1 sheet has insufficient data');
     return null;
@@ -103,9 +116,16 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
   const hasHeaderRow = dateCol >= 0 || trucksCol >= 0 || weightCol >= 0;
 
   const breakdownByIsoDate = {};
-  const receiving2 = findSheetByName(workbook, historySheetName('Receiving2', periodOverride));
-  if (receiving2) {
-    const data2 = window.XLSX.utils.sheet_to_json(receiving2, { header: 1, raw: false });
+  let data2 = null;
+  if (syntheticTabs) {
+    data2 = syntheticTabs.receiving2;
+  } else {
+    const receiving2 = findSheetByName(workbook, historySheetName('Receiving2', periodOverride));
+    if (receiving2) {
+      data2 = window.XLSX.utils.sheet_to_json(receiving2, { header: 1, raw: false });
+    }
+  }
+  {
     if (Array.isArray(data2) && data2.length > 0) {
       const header2 = Array.isArray(data2[0]) ? data2[0] : [];
       const header2Norm = header2.map(h => String(h || '').trim().toLowerCase());
@@ -174,9 +194,16 @@ async function fetchReceivingSummary(force = false, periodOverride = null) {
   }
 
   const truckDetailsByIsoDate = {};
-  const receiving3 = findSheetByName(workbook, historySheetName('Receiving3', periodOverride));
-  if (receiving3) {
-    const data3 = window.XLSX.utils.sheet_to_json(receiving3, { header: 1, raw: false });
+  let data3 = null;
+  if (syntheticTabs) {
+    data3 = syntheticTabs.receiving3;
+  } else {
+    const receiving3 = findSheetByName(workbook, historySheetName('Receiving3', periodOverride));
+    if (receiving3) {
+      data3 = window.XLSX.utils.sheet_to_json(receiving3, { header: 1, raw: false });
+    }
+  }
+  {
     if (Array.isArray(data3) && data3.length > 0) {
       const header3 = Array.isArray(data3[0]) ? data3[0] : [];
       const header3Norm = header3.map(h => String(h || '').trim().toLowerCase());
@@ -436,7 +463,7 @@ function wireReceivingPopupEvents(container, marker) {
       e.stopPropagation(); e.preventDefault();
       monthBtn.textContent = 'Loading…';
       monthBtn.disabled = true;
-      if (!receivingHistoryMonths) receivingHistoryMonths = await discoverHistoryMonths('Receiving1');
+      if (!receivingHistoryMonths) receivingHistoryMonths = await discoverHistoryMonths('Receiving');
       const payload = await fetchReceivingSummary(false, receivingCurrentPeriod);
       marker.setPopupContent(unescapeAngles(renderReceivingPopup(payload)));
       setTimeout(() => { const el = marker.getPopup()?.getElement(); if (el) wireReceivingPopupEvents(el, marker); }, 0);
