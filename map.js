@@ -21,11 +21,6 @@ L.imageOverlay('Scrapyard.png', [
 ]).addTo(map);
 
 /* ===================================================================
- Monthly consumption CSV
-=================================================================== */
-const consumptionCsvUrl = 'AverageConsumption.csv'; // <-- set per month
-
-/* ===================================================================
  ICON DEFINITIONS
 =================================================================== */
 const iconst181 = L.icon({ iconUrl:'icons/st181.png',iconSize:[96,96],iconAnchor:[48,48] });
@@ -501,16 +496,6 @@ Promise.all([
   
   const unknownTypes = new Set();
 
-  // Helpers
-  function formatAgeYM(totalMonths) {
-    if (typeof totalMonths !== 'number' || !isFinite(totalMonths) || totalMonths < 0) return '';
-    const years = Math.floor(totalMonths / 12);
-    const months = totalMonths % 12;
-    const yPart = years > 0 ? `${years} ${years === 1 ? 'year' : 'years'}` : '';
-    const mPart = months > 0 ? `${months} ${months === 1 ? 'month' : 'months'}` : (years === 0 ? '0 months' : '');
-    return yPart && mPart ? `${yPart} ${mPart}` : (yPart || mPart);
-  }
-
 function renderPopupHtml(marker, s) {
   if (!s) return `<b>${marker.name}</b>`;
 
@@ -566,52 +551,8 @@ function renderPopupHtml(marker, s) {
     }
   });
 
-  // Past Due list (> 6 months)
-  const pastDue = [];
-  const seenCodes = new Set();
-  const exemptTypes = new Set(["Coils", "Breaking", "Unbreakable", "Alloys"]);
-function isPastDueExempt(marker, stockIndex) {
-  if (!marker) return true;
-  if (!exemptTypes.has(marker.type)) return false;
-  if (marker.type === "Alloys") {
-    const name = String(marker.name || "").toLowerCase();
-    const code = extractPileCode(marker.name);
-    const s = code ? stockIndex[code] : null;
-    const material = String((s && s.material) || "").toLowerCase();
-    const isMoOx =
-      name.includes("molybdenum oxide") ||
-      material.includes("molybdenum oxide");
-    return !isMoOx;
-  }
-  return true;
-}
-
-  markers.forEach(marker => {
-    if (isPastDueExempt(marker, stockIndexGlobal)) return;
-    const code = extractPileCode(marker.name);
-    if (!code) return;
-    const s = stockIndexGlobal[code];
-    if (!s) return;
-    const dt = parseMDY(s.last_zero_date);
-    if (!dt) return;
-    const mAge = monthsDiff(dt, new Date());
-    if (mAge > 6 && !seenCodes.has(code)) {
-      pastDue.push({
-        code: code,
-        name: marker.name,
-        rawType: marker.type,
-        material: s.material || '',
-        lastZero: s.last_zero_date,
-        ageMonths: mAge,
-        ageLabel: formatAgeYM(mAge),
-        invLbs: s.operating_inventory_lbs,
-        marker: marker._leaflet
-      });
-      seenCodes.add(code);
-    }
-  });
-  pastDue.sort((a, b) => (b.ageMonths - a.ageMonths) || a.code.localeCompare(b.code));
-  window.pastDue = pastDue;
+  // Past Due list (> 6 months, plus "stopped" piles) — see pastdue.js
+  const pastDue = buildPastDueList(markers, stockIndexGlobal);
 
   /* ===================================================================
  SEARCH PANEL HELPER FUNCTIONS
@@ -627,7 +568,8 @@ function isPastDueExempt(marker, stockIndex) {
         invLbs: p.invLbs,
         lastZero: p.lastZero,
         ageLabel: p.ageLabel,
-        type: p.rawType
+        type: p.rawType,
+        stopped: p.stopped
       }));
     }
 
@@ -884,7 +826,7 @@ function isPastDueExempt(marker, stockIndex) {
           <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
             <div style="flex: 1;">
               <div style="font-weight: 600; ${codeStyle}">
-                ${p.code ?? '—'} — ${p.material}
+                ${p.code ?? '—'} — ${p.material}${p.stopped ? ' <span style="color:#c00;font-weight:700;margin-left:6px">STOPPED</span>' : ''}
               </div>
               <div style="color: #666; margin-top: 4px;">
                 ${p.name}
@@ -1072,64 +1014,6 @@ function isPastDueExempt(marker, stockIndex) {
 
   searchBtnCtrl.addTo(map);
 
-  /* ===================================================================
-   CONSUMPTION CSV PARSER
-  =================================================================== */
-  async function fetchConsumptionCsv() {
-    const res = await fetch(consumptionCsvUrl);
-    if (!res.ok) throw new Error(`Failed to fetch ${consumptionCsvUrl}: ${res.status}`);
-    const text = await res.text();
-    // New fixed format:
-    // A: Pile Number | B: Material Lot # | C: Total Lbs consumed | D: Total Tons consumed
-    // E1: Days represented by this monthly total (manually maintained)
-    const lines = text.split(/\r?\n/).filter(l => String(l || '').trim() !== '');
-    if (!lines.length) throw new Error("Consumption CSV is empty.");
-
-    const headerParts = parseCsvLine(lines[0]).map(v => String(v || '').trim());
-    const headerNorm = headerParts.map(v => v.toLowerCase());
-    const findCol = (...names) => {
-      const wanted = names.map(n => String(n).toLowerCase());
-      return headerNorm.findIndex(h => wanted.includes(h));
-    };
-
-    const pileCol = findCol('pile_number', 'pile number', 'pile', 'pile #', 'pile#');
-    const totalLbsCol = findCol('total_lbs', 'total lbs', 'total_lbs consumed', 'total lbs consumed');
-    const resolvedPileCol = pileCol >= 0 ? pileCol : 0;
-    const resolvedTotalLbsCol = totalLbsCol >= 0 ? totalLbsCol : 2;
-
-    const { year, month } = getCurrentInventoryPeriod();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const configuredDays = Number(String(headerParts[4] || '').trim());
-    const dayDivisor = (Number.isFinite(configuredDays) && configuredDays > 0)
-      ? configuredDays
-      : Math.max(1, daysInMonth);
-
-    const pileTotalsByCode = {}; // { CODE -> totalLbs }
-    for (let i = 1; i < lines.length; i++) {
-      const raw = lines[i];
-      if (!raw) continue;
-      const parts = parseCsvLine(raw);
-      if (parts.length < 3) continue;
-
-      const pile = normalizePileCode(parts[resolvedPileCol]);
-      if (!pile) continue;
-
-      const totalLbs = Number(String(parts[resolvedTotalLbsCol] || '').replace(/,/g, '').trim());
-      if (!Number.isFinite(totalLbs)) continue;
-
-      pileTotalsByCode[pile] = (pileTotalsByCode[pile] || 0) + totalLbs;
-    }
-
-    const pileAvgByCode = {};
-    Object.entries(pileTotalsByCode).forEach(([code, totalLbs]) => {
-      pileAvgByCode[code] = totalLbs / dayDivisor;
-    });
-
-    return { pileAvgByCode };
-  }
-
-  window.fetchConsumptionCsv = fetchConsumptionCsv;
-
   if (unknownTypes.size) console.warn('Unknown types:', Array.from(unknownTypes));
 
   // Auto-fetch banner data after all initialization is complete so the XLSX
@@ -1140,70 +1024,6 @@ function isPastDueExempt(marker, stockIndex) {
     try { await fetchBucketLoadingConsumption(); } catch (e) { console.warn('Auto-fetch bucket loading failed:', e); }
   })();
 }).catch(err => console.error('Data load failed:', err));
-
-/* ===================================================================
- Past Due XLSX Export (robust, non-corrupt)
-=================================================================== */
-window.exportPastDueXlsx = async function exportPastDueXlsx() {
-  try {
-    const XLSXlib = window.XLSX;
-if (!XLSXlib || !XLSXlib.utils) {
-  alert('XLSX library not loaded.');
-  console.error('XLSX missing or invalid:', window.XLSX);
-  return;
-}
-
-    // Fetch consumption averages
-    const { pileAvgByCode } = await fetchConsumptionCsv();
-
-    const rows = pastDue.map(p => {
-      const codeKey = normalizePileCode(p.code);
-      const invLbs = typeof p.invLbs === 'number' ? Math.max(0, p.invLbs) : 0;
-      const avgDaily = pileAvgByCode[codeKey] ?? 0;
-      const dud = avgDaily > 0 ? invLbs / avgDaily : 0;
-
-      return {
-        'Pile Number': p.code ?? '—',
-        'Name': p.name ?? '—',
-        'Material': p.material ?? '—',
-        'Last Zero Date': p.lastZero ?? '—',
-        'Age': p.ageLabel ?? '—',
-        'Inventory (lbs)': invLbs,
-        'Average Consumed Daily': Math.round(avgDaily || 0),
-        'Days Until Depleted': Number.isFinite(dud) ? Number(dud.toFixed(1)) : 0,
-        'Action': ''
-      };
-    });
-
-    // Convert to worksheet
-    const ws = XLSXlib.utils.json_to_sheet(rows);
-
-    // Auto column widths
-    const colWidths = Object.keys(rows[0] || {}).map(k => ({
-      wch: Math.max(
-        k.length,
-        ...rows.map(r => String(r[k] ?? '').length)
-      ) + 2
-    }));
-    ws['!cols'] = colWidths;
-
-    // Build workbook
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'PastDue');
-
-    // Filename
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-
-    XLSX.writeFile(wb, `PastDue_${yyyy}-${mm}-${dd}.xlsx`);
-
-  } catch (err) {
-    console.error('Past Due export failed:', err);
-    alert('Past Due export failed.');
-  }
-};
 
 /* ===================================================================
  LAYER CONTROL
