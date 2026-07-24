@@ -37,6 +37,7 @@ function buildDashMonthModel(year, month, src) {
   const days = Array.from({ length: daysInMonth }, (_, i) => ({
     day: i + 1,
     consumedTons: 0, heats: 0, trucks: 0, truckLbs: 0, brokenTons: 0, billableTons: 0,
+    railcars: 0, railLbs: 0,
     hasData: false,
   }));
   const at = d => (d >= 1 && d <= daysInMonth) ? days[d - 1] : null;
@@ -68,6 +69,31 @@ function buildDashMonthModel(year, month, src) {
     t.hasData = true;
   });
 
+  // Newer sheets date each release in the Car Status column (parsed into
+  // releasedDate by fetchRailcarSummary); older historical sheets don't,
+  // so day stays null there and those cars are listed but not charted.
+  const released = src.rail
+    ? (src.rail.released?.length ? src.rail.released : (src.rail.railcars || []))
+    : [];
+  const cars = released.map(c => {
+    const g = parseWeight(c.ourGross), t = parseWeight(c.ourTare);
+    let net = (Number.isFinite(g) && Number.isFinite(t)) ? g - t : parseWeight(c.shipperNet);
+    if (!Number.isFinite(net)) net = null;
+    const day = (c.releasedDate instanceof Date
+      && c.releasedDate.getFullYear() === year
+      && c.releasedDate.getMonth() === month)
+      ? c.releasedDate.getDate() : null;
+    return { car: c.railcarNum, supplier: c.supplier, mainSupplier: c.mainSupplier, material: c.material, lot: c.lot, netLbs: net, status: c.status || '—', day };
+  });
+  cars.forEach(c => {
+    const t = at(c.day);
+    if (!t) return;
+    t.railcars += 1;
+    t.railLbs += c.netLbs || 0;
+    t.hasData = true;
+  });
+  const railLbs = cars.reduce((s, c) => s + (c.netLbs || 0), 0);
+
   // Current month is partial: only chart up to the last day with data.
   const { year: curY, month: curM } = getCurrentInventoryPeriod();
   let lastDay = daysInMonth;
@@ -76,18 +102,6 @@ function buildDashMonthModel(year, month, src) {
     days.forEach(d => { if (d.hasData) lastDay = d.day; });
     if (lastDay === 0) lastDay = Math.min(new Date().getDate(), daysInMonth);
   }
-
-  // Railcars have no release date in the source sheet — monthly list only.
-  const released = src.rail
-    ? (src.rail.released?.length ? src.rail.released : (src.rail.railcars || []))
-    : [];
-  const cars = released.map(c => {
-    const g = parseWeight(c.ourGross), t = parseWeight(c.ourTare);
-    let net = (Number.isFinite(g) && Number.isFinite(t)) ? g - t : parseWeight(c.shipperNet);
-    if (!Number.isFinite(net)) net = null;
-    return { car: c.railcarNum, supplier: c.supplier, material: c.material, lot: c.lot, netLbs: net, status: c.status || '—' };
-  });
-  const railLbs = cars.reduce((s, c) => s + (c.netLbs || 0), 0);
 
   const rowDay = r => r.day || dashIsoDay(r.isoDate) || 0;
   const sortAsc = rows => [...rows].sort((a, b) => a.date - b.date);
@@ -263,28 +277,36 @@ function dashTruckTable() {
 }
 
 function dashRailTable() {
-  const { model } = _dashOvl;
+  const { year, month, model } = _dashOvl;
+  const anyDated = model.cars.some(c => c.day);
   const rows = model.cars.map(c => {
     const statusLower = String(c.status).toLowerCase();
     const statusColor = statusLower.includes('released') ? '#22c55e'
       : statusLower.includes('reject') ? '#f87171' : '#94a3b8';
     const material = c.material || getMaterialForLotOrPile(c.lot, '');
+    const supplierCell = c.mainSupplier
+      ? `<span title="${esc(c.supplier || '—').replace(/"/g, '&quot;')}" style="text-decoration:underline dotted">${esc(c.mainSupplier)}</span>`
+      : esc(c.supplier || '—');
     return `<tr>
       <td>${esc(c.car)}</td>
-      <td class="l">${esc(c.supplier || '—')}</td>
+      <td class="l">${supplierCell}</td>
       <td class="l">${esc(material || '—')}</td>
       <td>${esc(c.lot || '—')}</td>
       <td>${c.netLbs !== null ? fmtInt(c.netLbs) : '—'}</td>
       <td>${c.netLbs !== null ? fmtTons2(c.netLbs / 2000, 2) : '—'}</td>
+      <td>${c.day ? dashDayCell(year, month, c.day) : '—'}</td>
       <td class="l" style="color:${statusColor}">${esc(c.status)}</td>
     </tr>`;
   }).join('');
+  const note = anyDated
+    ? `<div class="dash-note">Release dates come from the Car Status column; cars without one (older data) are listed but not charted by day.</div>`
+    : `<div class="dash-note">No release dates recorded in this month's Car Status column, so railcars are compared month-to-month and listed here rather than charted by day.</div>`;
   return `<div class="dash-sec-title">Railcars Received — ${fmtInt(model.cars.length)} cars this month</div>
-    <div class="dash-note">Railcar releases aren't dated in the source sheet (Car Status only), so railcars are compared month-to-month and listed here rather than charted by day.</div>
+    ${note}
     <div class="dash-tbl-wrap" style="max-height:340px;overflow-y:auto"><table>
-      <tr><th>Car</th><th class="l">Supplier</th><th class="l">Material</th><th>Lot #</th><th>Net Lbs</th><th>Net Tons</th><th class="l">Status</th></tr>
-      ${rows || '<tr><td colspan="7" style="color:#64748b">No railcars recorded for this month.</td></tr>'}
-      <tr class="total-row"><td>Total</td><td class="l"></td><td class="l"></td><td></td><td>${fmtInt(model.railLbs)}</td><td>${fmtTons2(model.railLbs / 2000, 2)}</td><td class="l"></td></tr>
+      <tr><th>Car</th><th class="l">Supplier</th><th class="l">Material</th><th>Lot #</th><th>Net Lbs</th><th>Net Tons</th><th>Released</th><th class="l">Status</th></tr>
+      ${rows || '<tr><td colspan="8" style="color:#64748b">No railcars recorded for this month.</td></tr>'}
+      <tr class="total-row"><td>Total</td><td class="l"></td><td class="l"></td><td></td><td>${fmtInt(model.railLbs)}</td><td>${fmtTons2(model.railLbs / 2000, 2)}</td><td></td><td class="l"></td></tr>
     </table></div>`;
 }
 
@@ -375,9 +397,26 @@ function renderDashOvl() {
       <div class="dash-stat"><div class="s-lbl">Peak day</div><div class="s-val">${peak ? `${month + 1}/${peak.day}` : '—'} <span class="unit">${peak ? `${dashNum(getVal(peak), dm.dec)} ${esc(dm.unit)}` : ''}</span></div></div>`;
   }
 
-  // Daily chart — value-only tooltips; railcars have no daily dates to chart.
+  // Daily chart — value-only tooltips. Railcars chart by their parsed
+  // release date when the month's Car Status column has dates.
   let chart = '';
-  if ((!isRecv || _dashOvl.recvSub !== 'rail') && model.days.length) {
+  const railView = isRecv && _dashOvl.recvSub === 'rail';
+  const railDated = model.cars.some(c => c.day);
+  if (railView && railDated && model.days.length) {
+    const letters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+    const chartVals = model.days.map(d => ({
+      label: `${letters[new Date(year, month, d.day).getDay()]} ${month + 1}/${d.day}`,
+      axis: String(d.day),
+      value: d.railcars,
+      hl: false,
+    }));
+    chart = `<div class="dash-sec-title" style="margin-top:4px">Railcars released per day</div>`
+      + dashBarChart({
+        values: chartVals, color: '#3987e5', height: 170,
+        dec: 0, unit: 'cars',
+        labelEvery: model.days.length > 12 ? 2 : 1,
+      });
+  } else if (!railView && model.days.length) {
     const letters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
     const chartVals = model.days.map(d => ({
       label: `${letters[new Date(year, month, d.day).getDay()]} ${month + 1}/${d.day}`,

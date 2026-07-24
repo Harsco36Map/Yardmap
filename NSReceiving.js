@@ -1,4 +1,17 @@
 let railcarCache = { at: 0, data: null };
+
+// Pulls the release date out of a Car Status cell (e.g. "Released 7/14" or
+// "Released 7/14/2026"). Newer sheets always include this date; older
+// historical sheets may not, so callers must handle null.
+function parseRailcarReleaseDate(status, fallbackYear) {
+  const m = String(status || '').match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+  if (!m) return null;
+  const mo = +m[1], da = +m[2];
+  let yr = m[3] ? +m[3] : fallbackYear;
+  if (yr < 100) yr += 2000;
+  if (mo < 1 || mo > 12 || da < 1 || da > 31 || !Number.isFinite(yr)) return null;
+  return new Date(yr, mo - 1, da);
+}
 let railcarHistoryMonths = null;
 let railcarCurrentPeriod = null;
 const railcarHistoryCache = {};
@@ -31,6 +44,7 @@ async function fetchRailcarSummary(force = false, periodOverride = null) {
   }
 
   const railcars = [];
+  const fallbackYear = periodOverride ? periodOverride.year : getCurrentInventoryPeriod().year;
   let i = 2; // skip 2 header rows
 
   while (i < data.length) {
@@ -59,6 +73,7 @@ async function fetchRailcarSummary(force = false, periodOverride = null) {
       ourTare:      String(primary[9] || '').trim(),
       pile:         String(primary[10] || '').trim(),
       status,
+      releasedDate: parseRailcarReleaseDate(status, fallbackYear),
       mainSupplier: hasSecondary ? String(next[2] || '').trim() : '',
       consistency:  hasSecondary ? String(next[3] || '').trim() : '',
       regrade:      hasSecondary ? String(next[4] || '').trim() : ''
@@ -142,10 +157,13 @@ function renderRailcarPopup(payload) {
     return '—';
   };
 
+  // Show only the translated supplier name; the raw supplier from the ASN
+  // shows as hovertext (reuses the instant [data-offset] tooltip wiring).
+  // Rows without a translated name (older data) fall back to the raw one.
   const fmtSupplier = car => {
-    const line1 = esc(car.supplier || '—');
-    if (!car.mainSupplier) return line1;
-    return line1 + '<br><span style="font-size:11px;color:#777">' + esc(car.mainSupplier) + '</span>';
+    if (!car.mainSupplier) return esc(car.supplier || '—');
+    const rawAttr = esc(car.supplier || '—').replace(/"/g, '&quot;');
+    return '<span data-offset="' + rawAttr + '" style="text-decoration:underline dotted">' + esc(car.mainSupplier) + '</span>';
   };
 
   const fmtMaterial = car => {
@@ -170,6 +188,7 @@ function renderRailcarPopup(payload) {
       + '<th style="text-align:left;padding:2px 6px">PO #</th>'
       + '<th style="text-align:left;padding:2px 6px">Supplier</th>'
       + '<th style="text-align:left;padding:2px 6px">Material</th>'
+      + '<th style="text-align:left;padding:2px 6px">Destination</th>'
       + '<th style="text-align:right;padding:2px 6px">Shpr Gross</th>'
       + '<th style="text-align:right;padding:2px 6px">Shpr Tare</th>'
       + '<th style="text-align:right;padding:2px 6px">Shpr Net</th>'
@@ -192,6 +211,7 @@ function renderRailcarPopup(payload) {
             + '<td style="padding:2px 6px;color:#555">' + esc(car.po || '—') + '</td>'
             + '<td style="padding:2px 6px">' + fmtSupplier(car) + '</td>'
             + '<td style="padding:2px 6px">' + fmtMaterial(car) + '</td>'
+            + '<td style="padding:2px 6px;font-weight:600;color:#e65100">' + esc(car.pile || '—') + '</td>'
             + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperGross) + '</td>'
             + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperTare) + '</td>'
             + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperNet) + '</td>'
