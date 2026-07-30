@@ -166,11 +166,34 @@ function renderRailcarPopup(payload) {
     return '<span data-offset="' + rawAttr + '" style="text-decoration:underline dotted">' + esc(car.mainSupplier) + '</span>';
   };
 
+  // If the car is being regraded ("RG>NewMaterial" in the secondary row),
+  // show the new material as the primary label and stash the original
+  // material as hovertext/click-to-copy, mirroring fmtSupplier below.
+  const regradeTarget = car => {
+    const m = /^RG>\s*(.+)$/i.exec(car.regrade || '');
+    return m ? m[1].trim() : null;
+  };
+
   const fmtMaterial = car => {
-    const line1 = esc(car.material || '—');
-    const extras = [car.regrade, car.consistency].filter(Boolean).map(esc).join(' · ');
+    const target = regradeTarget(car);
+    let line1;
+    if (target) {
+      const rawAttr = esc(car.material || '—').replace(/"/g, '&quot;');
+      line1 = '<span data-offset="' + rawAttr + '" style="text-decoration:underline dotted">' + esc(target) + '</span>';
+    } else {
+      line1 = esc(car.material || '—');
+    }
+    const extras = [target ? null : car.regrade, car.consistency].filter(Boolean).map(esc).join(' · ');
     if (!extras) return line1;
     return line1 + '<br><span style="font-size:11px;color:#777">' + extras + '</span>';
+  };
+
+  // On the on-site (active) panel, a "regradePile/realDestPile" value should
+  // only show the real destination; the released panel keeps showing both.
+  const fmtPileOnsite = car => {
+    const pile = car.pile || '';
+    const slash = pile.indexOf('/');
+    return esc((slash === -1 ? pile : pile.slice(slash + 1).trim()) || '—');
   };
 
   const monthFolder = railcarCurrentPeriod
@@ -211,7 +234,7 @@ function renderRailcarPopup(payload) {
             + '<td style="padding:2px 6px;color:#555">' + esc(car.po || '—') + '</td>'
             + '<td style="padding:2px 6px">' + fmtSupplier(car) + '</td>'
             + '<td style="padding:2px 6px">' + fmtMaterial(car) + '</td>'
-            + '<td style="padding:2px 6px;font-weight:600;color:#e65100">' + esc(car.pile || '—') + '</td>'
+            + '<td style="padding:2px 6px;font-weight:600;color:#e65100">' + fmtPileOnsite(car) + '</td>'
             + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperGross) + '</td>'
             + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperTare) + '</td>'
             + '<td style="padding:2px 6px;text-align:right">' + fmtW(car.shipperNet) + '</td>'
