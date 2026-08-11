@@ -25,7 +25,7 @@ const PASTDUE_EXEMPT_TYPES = new Set(["Coils", "Breaking", "Unbreakable", "Alloy
 // to exclude specific piles from the age-based past-due calculations.
 // Leading zeros don't matter ("092" matches "92"). Example:
 //   const PASTDUE_EXEMPT_PILES = ["148", "20H"];
-const PASTDUE_EXEMPT_PILES = ["931"
+const PASTDUE_EXEMPT_PILES = ["931", "923"
 ];
 
 const pastDueExemptPileSet = new Set(
