@@ -140,15 +140,15 @@ function pingMarker(marker, options = {}) {
  LOAD CELL MARKERS
 =================================================================== */
 const loadCellMarkers = {
-  LC1: L.circleMarker([40.79375707439572, -82.53582134842874], {
+  LC1: L.circleMarker([40.79359753782521, -82.53651537001133], {
     radius: 15, color:"rgba(255,255,0,0.01)", fillColor:"rgba(0,0,0,0.01)",
     fillOpacity:0.01, weight:10
   }).bindTooltip("LC1"),
-  LC2: L.circleMarker([40.79414131582521, -82.53631889820099], {
+  LC2: L.circleMarker([40.79417829111618, -82.53719463944437], {
     radius: 15, color:"rgba(255,255,0,0.01)", fillColor:"rgba(0,0,0,0.01)",
     fillOpacity:0.01, weight:10
   }).bindTooltip("LC2"),
-  LC3: L.circleMarker([40.79460316783076, -82.53730528056623], {
+  LC3: L.circleMarker([40.7948224948989, -82.5384257733822], {
     radius: 15, color:"rgba(255,255,0,0.01)", fillColor:"rgba(0,0,0,0.01)",
     fillOpacity:0.01, weight:10
   }).bindTooltip("LC3"),
@@ -163,7 +163,7 @@ const loadCells = {
 /* ===================================================================
  RADIATION LINK MARKER
 =================================================================== */
-const radiationMarker = L.circleMarker([40.79423553252727, -82.53435252152397], {
+const radiationMarker = L.circleMarker([40.79431078744025, -82.5348524004221], {
   radius: 20,
   color: "rgba(0,0,0,0.00001)",
   fillColor: "rgba(0,0,0,0.00001)",
@@ -180,7 +180,7 @@ radiationMarker.on("click", () => {
 /* ===================================================================
  HARSCO SHAREPOINT LINK MARKER
 =================================================================== */
-const harscoMarker = L.circleMarker([40.79244226436424, -82.53258714613442], {
+const harscoMarker = L.circleMarker([40.7916971899383, -82.53257552115001], {
   radius: 20,
   color: "rgba(0,0,0,0.00001)",
   fillColor: "rgba(0,0,0,0.00001)",
@@ -313,11 +313,11 @@ function updateMaterialReceivedBanner() {
 
 // 1) Config -----------------------------------------------------------
 const totalsXlsxUrl = 'Production.xlsx';
-const burningLatLng = [40.79365495632949, -82.53501357377355];
-const breakingLatLng = [40.79408763021845, -82.5388475264302];
-const bucketLoadingLatLng = [40.79393364810161, -82.53693358538756];
-const receivingLatLng = [40.79379326877625, -82.53696516452395];
-const railcarLatLng = [40.79320323425653, -82.53296183080616];
+const burningLatLng = [40.79348483860853, -82.53557190299036];
+const breakingLatLng = [40.79406660818552, -82.54036031663418];
+const bucketLoadingLatLng = [40.79382902750812, -82.53791481256486];
+const receivingLatLng = [40.79364982613555, -82.5379765033722];
+const railcarLatLng = [40.79264821862237, -82.53261476755144];
 
 // 2) Cache + helpers --------------------------------------------------
 let totalsWorkbookCache = { at: 0, workbook: null };
