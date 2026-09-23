@@ -503,7 +503,7 @@ def create_outlook_draft(
 
 
 def generate_emails(missing_rows, equipment_header, shipper_key, contacts_path):
-    """Generate Outlook drafts per shipper using ASNContacts.xlsx mapping.
+    """Generate Outlook drafts per friendly shipper using ASNContacts.xlsx mapping.
 
     ASNContacts.xlsx expected columns:
       A: Friendly name
@@ -579,15 +579,22 @@ def generate_emails(missing_rows, equipment_header, shipper_key, contacts_path):
                 contacts[key] = {"friendly": friendly or "", "emails": emails or "", "draft": draft or ""}
     print(f"DEBUG: contacts found for keys: {list(contacts.keys())}")
     # If contacts remains empty, nothing will be generated
-    # group missing_rows by normalized shipper
+    # Group missing rows by the friendly shipper name in Column A. This lets
+    # multiple shipper codes that belong to one broker share a draft.
     groups = {}
-    norm_map = {}
+    group_contacts = {}
+    group_names = {}
     for r in missing_rows:
         ship_val = r.get(shipper_key, '')
-        norm = re.sub(r"\s+", "", (ship_val or '')).upper()
-        groups.setdefault(norm, []).append(r)
-        norm_map[norm] = ship_val
-    print(f"DEBUG: groups to generate: {list(groups.keys())}")
+        shipper_norm = re.sub(r"\s+", "", (ship_val or '')).upper()
+        contact = contacts.get(shipper_norm)
+        friendly = (contact.get("friendly") if contact else "") or ship_val
+        group_key = re.sub(r"\s+", "", friendly).upper()
+        groups.setdefault(group_key, []).append(r)
+        group_names[group_key] = friendly
+        if contact:
+            group_contacts.setdefault(group_key, []).append(contact)
+    print(f"DEBUG: groups to generate: {list(group_names.values())}")
     # Try to create drafts in Outlook via COM (preferred)
     outlook_available = False
     outlook = None
@@ -609,20 +616,34 @@ def generate_emails(missing_rows, equipment_header, shipper_key, contacts_path):
     preferred_store = 'jmullins2@harsco.com'
     print(f"DEBUG: preferred_store hardcoded to: {preferred_store}")
 
-    for norm_key, rows in groups.items():
-        contact = contacts.get(norm_key)
-        if not contact:
-            print(f"No contact entry found for shipper '{norm_map.get(norm_key)}' (normalized '{norm_key}'), skipping email generation.")
+    for group_key, rows in groups.items():
+        contacts_for_group = group_contacts.get(group_key, [])
+        if not contacts_for_group:
+            print(
+                f"No contact entry found for friendly shipper "
+                f"'{group_names.get(group_key)}', skipping email generation."
+            )
             continue
-        friendly = contact.get('friendly') or norm_map.get(norm_key)
-        raw_addrs = (contact.get('emails') or '')
-        # normalize separators: semicolons/newlines -> comma, then split
-        addrs_clean = re.sub(r"[;\n\r]+", ",", raw_addrs)
-        recipients = [a.strip() for a in addrs_clean.split(',') if a.strip()]
+        friendly = group_names[group_key]
+        recipients = []
+        seen_recipients = set()
+        for contact in contacts_for_group:
+            raw_addrs = contact.get('emails') or ''
+            # normalize separators: semicolons/newlines -> comma, then split
+            addrs_clean = re.sub(r"[;\n\r]+", ",", raw_addrs)
+            for address in addrs_clean.split(','):
+                address = address.strip()
+                address_key = address.lower()
+                if address and address_key not in seen_recipients:
+                    seen_recipients.add(address_key)
+                    recipients.append(address)
         if not recipients:
-            print(f"EMAIL FAILURE [{friendly}]: no recipient addresses found for normalized shipper '{norm_key}'.")
+            print(f"EMAIL FAILURE [{friendly}]: no recipient addresses found.")
             continue
-        draft = contact.get('draft') or ''
+        draft = next(
+            (contact.get('draft') for contact in contacts_for_group if contact.get('draft')),
+            '',
+        )
         # collect ASNs (Equipment IDs)
         asns = [r.get(equipment_header, '').strip().strip('"') for r in rows if r.get(equipment_header)]
         asn_list_text = ', '.join(asns)
@@ -841,7 +862,7 @@ def main():
         msg = f"Found {missing_count} missing ASN(s) out of {total} pipeline rows. Saved results to: {output_path}"
         print(msg)
         # No automatic opening of folders; user requested no folder opening
-        # If ASNContacts.xlsx exists, generate Outlook drafts grouped by shipper
+        # If ASNContacts.xlsx exists, generate Outlook drafts grouped by friendly shipper
         if os.path.exists(contacts_xlsx):
             generate_emails(missing_rows, equipment_header, shipper_key, contacts_xlsx)
         else:
