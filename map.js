@@ -172,7 +172,33 @@ const radiationMarker = L.circleMarker([40.79431078744025, -82.5348524004221], {
   interactive: true
 });
 radiationMarker.addTo(map);
-radiationMarker.bindTooltip("ASMIV Panel", { permanent: false, direction: 'top', offset: [0, -22] });
+radiationMarker.bindTooltip("Buckets Radiation", { permanent: false, direction: 'top', offset: [0, -22] });
+radiationMarker.on("click", () => {
+  window.open("http://10.141.21.10:8080/ASM/main.jsp", "_blank");
+});
+const radiationMarker = L.circleMarker([40.79360376225836, -82.53781604874521], {
+  radius: 20,
+  color: "rgba(0,0,0,0.00001)",
+  fillColor: "rgba(0,0,0,0.00001)",
+  fillOpacity: 0.00001,
+  weight: 1,
+  interactive: true
+});
+radiationMarker.addTo(map);
+radiationMarker.bindTooltip("Trucks Radiation", { permanent: false, direction: 'top', offset: [0, -22] });
+radiationMarker.on("click", () => {
+  window.open("http://10.141.20.236:8080/ASM/main.jsp", "_blank");
+});
+const radiationMarker = L.circleMarker([40.79366710264798, -82.53779597537664], {
+  radius: 20,
+  color: "rgba(0,0,0,0.00001)",
+  fillColor: "rgba(0,0,0,0.00001)",
+  fillOpacity: 0.00001,
+  weight: 1,
+  interactive: true
+});
+radiationMarker.addTo(map);
+radiationMarker.bindTooltip("Rail Radiation", { permanent: false, direction: 'top', offset: [0, -22] });
 radiationMarker.on("click", () => {
   window.open("http://10.141.21.10:8080/ASM/main.jsp", "_blank");
 });
