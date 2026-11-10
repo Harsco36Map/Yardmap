@@ -200,7 +200,7 @@ const radiationMarker = L.circleMarker([40.79366710264798, -82.53779597537664], 
 radiationMarker.addTo(map);
 radiationMarker.bindTooltip("Rail Radiation", { permanent: false, direction: 'top', offset: [0, -22] });
 radiationMarker.on("click", () => {
-  window.open("http://10.141.21.10:8080/ASM/main.jsp", "_blank");
+  window.open("http://10.141.20.235:8080/ASM/main.jsp", "_blank");
 });
 
 /* ===================================================================
