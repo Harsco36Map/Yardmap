@@ -176,7 +176,7 @@ radiationMarker.bindTooltip("Buckets Radiation", { permanent: false, direction: 
 radiationMarker.on("click", () => {
   window.open("http://10.141.21.10:8080/ASM/main.jsp", "_blank");
 });
-const radiationMarker = L.circleMarker([40.79360376225836, -82.53781604874521], {
+const radiation1Marker = L.circleMarker([40.79360376225836, -82.53781604874521], {
   radius: 20,
   color: "rgba(0,0,0,0.00001)",
   fillColor: "rgba(0,0,0,0.00001)",
@@ -184,12 +184,12 @@ const radiationMarker = L.circleMarker([40.79360376225836, -82.53781604874521], 
   weight: 1,
   interactive: true
 });
-radiationMarker.addTo(map);
-radiationMarker.bindTooltip("Trucks Radiation", { permanent: false, direction: 'top', offset: [0, -22] });
-radiationMarker.on("click", () => {
+radiation1Marker.addTo(map);
+radiation1Marker.bindTooltip("Trucks Radiation", { permanent: false, direction: 'top', offset: [0, -22] });
+radiation1Marker.on("click", () => {
   window.open("http://10.141.20.236:8080/ASM/main.jsp", "_blank");
 });
-const radiationMarker = L.circleMarker([40.79366710264798, -82.53779597537664], {
+const radiation2Marker = L.circleMarker([40.79366710264798, -82.53779597537664], {
   radius: 20,
   color: "rgba(0,0,0,0.00001)",
   fillColor: "rgba(0,0,0,0.00001)",
@@ -197,9 +197,9 @@ const radiationMarker = L.circleMarker([40.79366710264798, -82.53779597537664], 
   weight: 1,
   interactive: true
 });
-radiationMarker.addTo(map);
-radiationMarker.bindTooltip("Rail Radiation", { permanent: false, direction: 'top', offset: [0, -22] });
-radiationMarker.on("click", () => {
+radiation2Marker.addTo(map);
+radiation2Marker.bindTooltip("Rail Radiation", { permanent: false, direction: 'top', offset: [0, -22] });
+radiation2Marker.on("click", () => {
   window.open("http://10.141.20.235:8080/ASM/main.jsp", "_blank");
 });
 
