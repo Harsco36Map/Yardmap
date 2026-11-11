@@ -24,12 +24,18 @@ L.imageOverlay('Scrapyard.png', [
  ICON DEFINITIONS
 =================================================================== */
 const iconst181 = L.icon({ iconUrl:'icons/st181.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome181 = L.icon({ iconUrl:'icons/Home181.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconst430 = L.icon({ iconUrl:'icons/st430.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome430 = L.icon({ iconUrl:'icons/Home430.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconst435 = L.icon({ iconUrl:'icons/st435.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome435 = L.icon({ iconUrl:'icons/Home435.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconst436 = L.icon({ iconUrl:'icons/st436.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconnickel409 = L.icon({ iconUrl:'icons/nickel409.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconcc409 = L.icon({ iconUrl:'icons/cc409.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome436 = L.icon({ iconUrl:'icons/Home436.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconst409 = L.icon({ iconUrl:'icons/st409.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome409 = L.icon({ iconUrl:'icons/Home409.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconnickel409 = L.icon({ iconUrl:'icons/nickel409.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHomenickel409 = L.icon({ iconUrl:'icons/Homenickel409.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconcc409 = L.icon({ iconUrl:'icons/cc409.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconblend181 = L.icon({ iconUrl:'icons/blend181.png',iconSize:[80,80],iconAnchor:[32,32] });
 const iconblend430 = L.icon({ iconUrl:'icons/blend430.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconHome = L.icon({ iconUrl:'icons/Home.png',iconSize:[96,96],iconAnchor:[48,48] });
@@ -46,12 +52,18 @@ const iconOther = L.icon({ iconUrl:'icons/Other.png',iconSize:[96,96],iconAnchor
 =================================================================== */
 const markerConfig = {
   "st181": { icon: iconst181, displayName: "181 Stainless" },
+  "Home181": { icon: iconHome, displayName: "181 Home" },
   "st430": { icon: iconst430, displayName: "430 Stainless" },
+  "Home430": { icon: iconHome, displayName: "430 Home" },
   "st435": { icon: iconst435, displayName: "435 Stainless" },
+  "Home435": { icon: iconHome, displayName: "435 Home" },
   "st436": { icon: iconst436, displayName: "436 Stainless" },
-  "nickel409": { icon: iconnickel409, displayName: "409 Nickel" },
-  "cc409": { icon: iconcc409, displayName: "409 Converters" },
+  "Home436": { icon: iconHome, displayName: "436 Home" },
   "st409": { icon: iconst409, displayName: "409 Scrap" },
+  "Home409": { icon: iconHome, displayName: "409 Home" },
+  "nickel409": { icon: iconnickel409, displayName: "409 Nickel" },
+  "Homenickel409": { icon: iconHome, displayName: "409 Nickel Home" },
+  "cc409": { icon: iconcc409, displayName: "409 Converters" },
   "blend181": { icon: iconblend181, displayName: "181 Blend" },
   "blend430": { icon: iconblend430, displayName: "430 Blend" },
   "Home": { icon: iconHome, displayName: "Home" },
