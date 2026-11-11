@@ -19,13 +19,13 @@
 
 // Marker types exempt from the age-based past-due mechanics.
 // (Alloys are exempt EXCEPT molybdenum oxide — see isPastDueExempt.)
-const PASTDUE_EXEMPT_TYPES = new Set(["Coils", "Breaking", "Unbreakable", "Alloys"]);
+const PASTDUE_EXEMPT_TYPES = new Set([]);
 
 // Individual pile exemptions — add pile codes here (quoted, comma-separated)
 // to exclude specific piles from the age-based past-due calculations.
 // Leading zeros don't matter ("092" matches "92"). Example:
 //   const PASTDUE_EXEMPT_PILES = ["148", "20H"];
-const PASTDUE_EXEMPT_PILES = ["931", "923"
+const PASTDUE_EXEMPT_PILES = [
 ];
 
 const pastDueExemptPileSet = new Set(
