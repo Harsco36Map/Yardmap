@@ -25,12 +25,17 @@ L.imageOverlay('Scrapyard.png', [
 =================================================================== */
 const iconst181 = L.icon({ iconUrl:'icons/st181.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconHome181 = L.icon({ iconUrl:'icons/Home181.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome171 = L.icon({ iconUrl:'icons/Home171.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome151 = L.icon({ iconUrl:'icons/Home151.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconst430 = L.icon({ iconUrl:'icons/st430.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconHome430 = L.icon({ iconUrl:'icons/Home430.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconst435 = L.icon({ iconUrl:'icons/st435.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconHome435 = L.icon({ iconUrl:'icons/Home435.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconst436 = L.icon({ iconUrl:'icons/st436.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconHome436 = L.icon({ iconUrl:'icons/Home436.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome439 = L.icon({ iconUrl:'icons/Home439.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome446 = L.icon({ iconUrl:'icons/Home446.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome447 = L.icon({ iconUrl:'icons/Home447.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconst409 = L.icon({ iconUrl:'icons/st409.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconHome409 = L.icon({ iconUrl:'icons/Home409.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconnickel409 = L.icon({ iconUrl:'icons/nickel409.png',iconSize:[96,96],iconAnchor:[48,48] });
@@ -38,7 +43,6 @@ const iconHomenickel409 = L.icon({ iconUrl:'icons/Homenickel409.png',iconSize:[9
 const iconcc409 = L.icon({ iconUrl:'icons/cc409.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconblend181 = L.icon({ iconUrl:'icons/blend181.png',iconSize:[80,80],iconAnchor:[32,32] });
 const iconblend430 = L.icon({ iconUrl:'icons/blend430.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconHome = L.icon({ iconUrl:'icons/Home.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconTundish = L.icon({ iconUrl:'icons/Tundish.png',iconSize:[128,128],iconAnchor:[64,64] });
 const iconReclaim = L.icon({ iconUrl:'icons/Reclaim.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconMtown = L.icon({ iconUrl:'icons/Mtown.png',iconSize:[96,96],iconAnchor:[48,48] });
@@ -53,12 +57,17 @@ const iconOther = L.icon({ iconUrl:'icons/Other.png',iconSize:[96,96],iconAnchor
 const markerConfig = {
   "st181": { icon: iconst181, displayName: "181 Stainless" },
   "Home181": { icon: iconHome181, displayName: "181 Home" },
+  "Home171": { icon: iconHome171, displayName: "171 Home" },
+  "Home151": { icon: iconHome151, displayName: "151 Home" },
   "st430": { icon: iconst430, displayName: "430 Stainless" },
   "Home430": { icon: iconHome430, displayName: "430 Home" },
   "st435": { icon: iconst435, displayName: "435 Stainless" },
   "Home435": { icon: iconHome435, displayName: "435 Home" },
   "st436": { icon: iconst436, displayName: "436 Stainless" },
   "Home436": { icon: iconHome436, displayName: "436 Home" },
+  "Home439": { icon: iconHome439, displayName: "439 Home" },
+  "Home446": { icon: iconHome446, displayName: "446 Home" },
+  "Home447": { icon: iconHome447, displayName: "447 Home" },
   "st409": { icon: iconst409, displayName: "409 Scrap" },
   "Home409": { icon: iconHome409, displayName: "409 Home" },
   "nickel409": { icon: iconnickel409, displayName: "409 Nickel" },
@@ -66,7 +75,6 @@ const markerConfig = {
   "cc409": { icon: iconcc409, displayName: "409 Converters" },
   "blend181": { icon: iconblend181, displayName: "181 Blend" },
   "blend430": { icon: iconblend430, displayName: "430 Blend" },
-  "Home": { icon: iconHome, displayName: "Home" },
   "Tundish": { icon: iconTundish, displayName: "Tundish" },
   "Reclaim": { icon: iconReclaim, displayName: "Reclaim" },
   "Mtown": { icon: iconMtown, displayName: "Middletown" },
