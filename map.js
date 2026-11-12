@@ -39,7 +39,7 @@ const iconHome447 = L.icon({ iconUrl:'icons/Home447.png',iconSize:[96,96],iconAn
 const iconst409 = L.icon({ iconUrl:'icons/st409.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconHome409 = L.icon({ iconUrl:'icons/Home409.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconnickel409 = L.icon({ iconUrl:'icons/nickel409.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconHomenickel409 = L.icon({ iconUrl:'icons/Homenickel409.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome40921 = L.icon({ iconUrl:'icons/Home40921.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconcc409 = L.icon({ iconUrl:'icons/cc409.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconblend181 = L.icon({ iconUrl:'icons/blend181.png',iconSize:[80,80],iconAnchor:[32,32] });
 const iconblend430 = L.icon({ iconUrl:'icons/blend430.png',iconSize:[96,96],iconAnchor:[48,48] });
@@ -71,7 +71,7 @@ const markerConfig = {
   "st409": { icon: iconst409, displayName: "409 Scrap" },
   "Home409": { icon: iconHome409, displayName: "409 Home" },
   "nickel409": { icon: iconnickel409, displayName: "409 Nickel" },
-  "Homenickel409": { icon: iconHomenickel409, displayName: "409 Nickel Home" },
+  "Home40921": { icon: iconHome40921, displayName: "409 Nickel Home" },
   "cc409": { icon: iconcc409, displayName: "409 Converters" },
   "blend181": { icon: iconblend181, displayName: "181 Blend" },
   "blend430": { icon: iconblend430, displayName: "430 Blend" },
