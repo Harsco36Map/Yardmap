@@ -24,68 +24,142 @@ L.imageOverlay('Scrapyard.png', [
  ICON DEFINITIONS
 =================================================================== */
 const iconst181 = L.icon({ iconUrl:'icons/st181.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconHome181 = L.icon({ iconUrl:'icons/Home181.png',iconSize:[48,48],iconAnchor:[32,32] });
-const iconHome171 = L.icon({ iconUrl:'icons/Home171.png',iconSize:[48,48],iconAnchor:[32,32] });
-const iconHome151 = L.icon({ iconUrl:'icons/Home151.png',iconSize:[48,48],iconAnchor:[32,32] });
+const iconHome181 = L.icon({ iconUrl:'icons/Home181.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish181 = L.icon({ iconUrl:'icons/Tundish181.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim181 = L.icon({ iconUrl:'icons/Reclaim181.png',iconSize:[80,80],iconAnchor:[40,40] });
+
+const iconHome171 = L.icon({ iconUrl:'icons/Home171.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish171 = L.icon({ iconUrl:'icons/Tundish171.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim171 = L.icon({ iconUrl:'icons/Reclaim171.png',iconSize:[80,80],iconAnchor:[40,40] });
+
+const iconHome151 = L.icon({ iconUrl:'icons/Home151.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish151 = L.icon({ iconUrl:'icons/Tundish151.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim151 = L.icon({ iconUrl:'icons/Reclaim151.png',iconSize:[80,80],iconAnchor:[40,40] });
+
 const iconst430 = L.icon({ iconUrl:'icons/st430.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconHome430 = L.icon({ iconUrl:'icons/Home430.png',iconSize:[48,48],iconAnchor:[32,32] });
+const iconHome430 = L.icon({ iconUrl:'icons/Home430.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish430 = L.icon({ iconUrl:'icons/Tundish430.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim430 = L.icon({ iconUrl:'icons/Reclaim430.png',iconSize:[80,80],iconAnchor:[40,40] });
+
+const iconHome439 = L.icon({ iconUrl:'icons/Home439.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish439 = L.icon({ iconUrl:'icons/Tundish439.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim439 = L.icon({ iconUrl:'icons/Reclaim439.png',iconSize:[80,80],iconAnchor:[40,40] });
+
 const iconst435 = L.icon({ iconUrl:'icons/st435.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconHome435 = L.icon({ iconUrl:'icons/Home435.png',iconSize:[48,48],iconAnchor:[32,32] });
+const iconHome435 = L.icon({ iconUrl:'icons/Home435.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish435 = L.icon({ iconUrl:'icons/Tundish435.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim435 = L.icon({ iconUrl:'icons/Reclaim435.png',iconSize:[80,80],iconAnchor:[40,40] });
+
 const iconst436 = L.icon({ iconUrl:'icons/st436.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconHome436 = L.icon({ iconUrl:'icons/Home436.png',iconSize:[48,48],iconAnchor:[32,32] });
-const iconHome439 = L.icon({ iconUrl:'icons/Home439.png',iconSize:[48,48],iconAnchor:[32,32] });
-const iconHome446 = L.icon({ iconUrl:'icons/Home446.png',iconSize:[48,48],iconAnchor:[32,32] });
-const iconHome447 = L.icon({ iconUrl:'icons/Home447.png',iconSize:[48,48],iconAnchor:[32,32] });
+const iconHome436 = L.icon({ iconUrl:'icons/Home436.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish436 = L.icon({ iconUrl:'icons/Tundish436.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim436 = L.icon({ iconUrl:'icons/Reclaim436.png',iconSize:[80,80],iconAnchor:[40,40] });
+
+const iconTundish444 = L.icon({ iconUrl:'icons/Tundish444.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim444 = L.icon({ iconUrl:'icons/Reclaim444.png',iconSize:[80,80],iconAnchor:[40,40] });
+
+const iconHome446 = L.icon({ iconUrl:'icons/Home446.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish446 = L.icon({ iconUrl:'icons/Tundish446.png',iconSize:[96,96],iconAnchor:[44,44] });
+
+const iconHome447 = L.icon({ iconUrl:'icons/Home447.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish447 = L.icon({ iconUrl:'icons/Tundish447.png',iconSize:[96,96],iconAnchor:[44,44] });
+
 const iconst409 = L.icon({ iconUrl:'icons/st409.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconHome409 = L.icon({ iconUrl:'icons/Home409.png',iconSize:[48,48],iconAnchor:[32,32] });
-const iconnickel409 = L.icon({ iconUrl:'icons/nickel409.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconHome40921 = L.icon({ iconUrl:'icons/Home40921.png',iconSize:[48,48],iconAnchor:[32,32] });
+const iconHome409 = L.icon({ iconUrl:'icons/Home409.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish409 = L.icon({ iconUrl:'icons/Tundish409.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim409 = L.icon({ iconUrl:'icons/Reclaim409.png',iconSize:[80,80],iconAnchor:[40,40] });
+const iconBScrap = L.icon({ iconUrl:'icons/BScrap.png',iconSize:[80,80],iconAnchor:[48,48] });
+const iconCScrap = L.icon({ iconUrl:'icons/CScrap.png',iconSize:[64,64],iconAnchor:[40,40] });
+
+const iconst40921 = L.icon({ iconUrl:'icons/st40921.png',iconSize:[96,96],iconAnchor:[48,48] });
+const iconHome40921 = L.icon({ iconUrl:'icons/Home40921.png',iconSize:[48,48],iconAnchor:[24,24] });
+const iconTundish40921 = L.icon({ iconUrl:'icons/Tundish40921.png',iconSize:[96,96],iconAnchor:[44,44] });
+const iconReclaim40921 = L.icon({ iconUrl:'icons/Reclaim40921.png',iconSize:[80,80],iconAnchor:[40,40] });
+
 const iconcc409 = L.icon({ iconUrl:'icons/cc409.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconblend181 = L.icon({ iconUrl:'icons/blend181.png',iconSize:[80,80],iconAnchor:[32,32] });
 const iconblend430 = L.icon({ iconUrl:'icons/blend430.png',iconSize:[96,96],iconAnchor:[48,48] });
-const iconTundish = L.icon({ iconUrl:'icons/Tundish.png',iconSize:[128,128],iconAnchor:[64,64] });
-const iconReclaim = L.icon({ iconUrl:'icons/Reclaim.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconMtown = L.icon({ iconUrl:'icons/Mtown.png',iconSize:[96,96],iconAnchor:[48,48] });
 const iconHBI = L.icon({ iconUrl:'icons/HBI.png',iconSize:[128,128],iconAnchor:[64,64] });
 const iconFrag = L.icon({ iconUrl:'icons/Frag.png',iconSize:[80,80],iconAnchor:[32,32] });
-const iconAlloys = L.icon({ iconUrl:'icons/Alloys.png',iconSize:[32,32],iconAnchor:[16,16] });
+const iconAlloys = L.icon({ iconUrl:'icons/Alloys.png',iconSize:[48,48],iconAnchor:[24,24] });
 const iconOther = L.icon({ iconUrl:'icons/Other.png',iconSize:[96,96],iconAnchor:[48,48] });
 
 /* ===================================================================
  MATERIAL MARKER CONFIG
 =================================================================== */
 const markerConfig = {
-  "st181": { icon: iconst181, displayName: "181 Stainless" },
-  "Home181": { icon: iconHome181, displayName: "181 Home" },
-  "Home171": { icon: iconHome171, displayName: "171 Home" },
-  "Home151": { icon: iconHome151, displayName: "151 Home" },
-  "st430": { icon: iconst430, displayName: "430 Stainless" },
-  "Home430": { icon: iconHome430, displayName: "430 Home" },
-  "st435": { icon: iconst435, displayName: "435 Stainless" },
-  "Home435": { icon: iconHome435, displayName: "435 Home" },
-  "st436": { icon: iconst436, displayName: "436 Stainless" },
-  "Home436": { icon: iconHome436, displayName: "436 Home" },
-  "Home439": { icon: iconHome439, displayName: "439 Home" },
-  "Home446": { icon: iconHome446, displayName: "446 Home" },
-  "Home447": { icon: iconHome447, displayName: "447 Home" },
-  "st409": { icon: iconst409, displayName: "409 Scrap" },
-  "Home409": { icon: iconHome409, displayName: "409 Home" },
-  "nickel409": { icon: iconnickel409, displayName: "409 Nickel" },
-  "Home40921": { icon: iconHome40921, displayName: "409 Nickel Home" },
+  "st409": { icon: iconst409, displayName: "409 Scrap", group: "409 Materials" },
+  "Home409": { icon: iconHome409, displayName: "409 Home", group: "409 Materials" },
+  "Tundish409": { icon: iconTundish409, displayName: "409 Tundish", group: "409 Materials" },
+  "Reclaim409": { icon: iconReclaim409, displayName: "409 Reclaim", group: "409 Materials" },
+  "BScrap": { icon: iconBScrap, displayName: "B Scrap", group: "409 Materials" },
+  "CScrap": { icon: iconCScrap, displayName: "C Scrap", group: "409 Materials" },
+
+  "st181": { icon: iconst181, displayName: "181 Stainless", group: "181 Materials" },
+  "Home181": { icon: iconHome181, displayName: "181 Home", group: "181 Materials" },
+  "Tundish181": { icon: iconTundish181, displayName: "181 Tundish", group: "181 Materials"  },
+  "Reclaim181": { icon: iconReclaim181, displayName: "181 Reclaim", group: "181 Materials" },
+
+  "st430": { icon: iconst430, displayName: "430 Stainless", group: "430 Materials" },
+  "Home430": { icon: iconHome430, displayName: "430 Home", group: "430 Materials" },
+  "Tundish430": { icon: iconTundish430, displayName: "430 Tundish", group: "430 Materials" },
+  "Reclaim430": { icon: iconReclaim430, displayName: "430 Reclaim", group: "430 Materials" },
+
+  "st435": { icon: iconst435, displayName: "435 Stainless", group: "435 Materials" },
+  "Home435": { icon: iconHome435, displayName: "435 Home", group: "435 Materials" },
+  "Tundish435": { icon: iconTundish435, displayName: "435 Tundish", group: "435 Materials" },
+  "Reclaim435": { icon: iconReclaim435, displayName: "435 Reclaim", group: "435 Materials" },
+
+  "st436": { icon: iconst436, displayName: "436 Stainless", group: "436 Materials" },
+  "Home436": { icon: iconHome436, displayName: "436 Home", group: "436 Materials" },
+  "Tundish436": { icon: iconTundish436, displayName: "436 Tundish", group: "436 Materials" },
+  "Reclaim436": { icon: iconReclaim436, displayName: "436 Reclaim", group: "436 Materials" },
+
+  "Home439": { icon: iconHome439, displayName: "439 Home", group: "439 Materials" },
+  "Tundish439": { icon: iconTundish439, displayName: "439 Tundish", group: "439 Materials" },
+  "Reclaim439": { icon: iconReclaim439, displayName: "439 Reclaim", group: "439 Materials" },
+
+  "Tundish444": { icon: iconTundish444, displayName: "444 Tundish", group: "444 Materials" },
+  "Reclaim444": { icon: iconReclaim444, displayName: "444 Reclaim", group: "444 Materials" },
+
+  "Home446": { icon: iconHome446, displayName: "446 Home", group: "446 Materials" },
+  "Tundish446": { icon: iconTundish446, displayName: "446 Tundish", group: "446 Materials" },
+
+  "Home447": { icon: iconHome447, displayName: "447 Home", group: "447 Materials" },
+  "Tundish447": { icon: iconTundish447, displayName: "447 Tundish", group: "447 Materials" },
+
+  "Home171": { icon: iconHome171, displayName: "171 Home", group: "171 Materials" },
+  "Tundish171": { icon: iconTundish171, displayName: "171 Tundish", group: "171 Materials" },
+  "Reclaim171": { icon: iconReclaim171, displayName: "171 Reclaim", group: "171 Materials" },
+
+  "Home151": { icon: iconHome151, displayName: "151 Home", group: "151 Materials" },
+  "Tundish151": { icon: iconTundish151, displayName: "151 Tundish", group: "151 Materials" },
+  "Reclaim151": { icon: iconReclaim151, displayName: "151 Reclaim", group: "151 Materials" },
+
+  "st40921": { icon: iconst40921, displayName: "409 Nickel", group: "Nickel Materials" },
+  "Home40921": { icon: iconHome40921, displayName: "Nickel Home", group: "Nickel Materials" },
+  "Tundish40921": { icon: iconTundish40921, displayName: "Nickel Tundish", group: "Nickel Materials" },
+  "Reclaim40921": { icon: iconReclaim40921, displayName: "Nickel Reclaim", group: "Nickel Materials" },
+
   "cc409": { icon: iconcc409, displayName: "409 Converters" },
   "blend181": { icon: iconblend181, displayName: "181 Blend" },
   "blend430": { icon: iconblend430, displayName: "430 Blend" },
-  "Tundish": { icon: iconTundish, displayName: "Tundish" },
-  "Reclaim": { icon: iconReclaim, displayName: "Reclaim" },
   "Mtown": { icon: iconMtown, displayName: "Middletown" },
   "HBI": { icon: iconHBI, displayName: "Hot Briq Iron" },
   "Frag": { icon: iconFrag, displayName: "Fragmented Scrap" },
   "Alloys": { icon: iconAlloys, displayName: "Alloys" },
   "Other": { icon: iconOther, displayName: "Other" },
 };
-Object.keys(markerConfig).forEach(type =>
-  markerConfig[type].layer = L.layerGroup().addTo(map)
-);
+// One LayerGroup per filter entry. Types that share the same `group` name share one layer, so a single checkbox toggles all of them.
+// Types without a `group` get their own layer, labeled with displayName.
+
+const filterLayers = {};
+Object.values(markerConfig).forEach(cfg => {
+  const label = cfg.group || cfg.displayName;
+  if (!filterLayers[label]) filterLayers[label] = L.layerGroup().addTo(map);
+  cfg.layer = filterLayers[label];
+});
  
 // ===== Simple accordion coordinator for the two panels =====
 window.yardPanels = window.yardPanels || {};
@@ -1074,9 +1148,7 @@ function renderPopupHtml(marker, s) {
 /* ===================================================================
  LAYER CONTROL
 =================================================================== */
-const overlayMaps = {};
-Object.values(markerConfig).forEach(cfg => overlayMaps[cfg.displayName] = cfg.layer);
-const layerControl = L.control.layers(null, overlayMaps, {
+const layerControl = L.control.layers(null, filterLayers, {
   collapsed: true,
   position: "bottomleft"
 }).addTo(map);
