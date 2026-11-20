@@ -55,6 +55,7 @@ const iconHome436 = L.icon({ iconUrl:'icons/Home436.png',iconSize:[48,48],iconAn
 const iconTundish436 = L.icon({ iconUrl:'icons/Tundish436.png',iconSize:[96,96],iconAnchor:[44,44] });
 const iconReclaim436 = L.icon({ iconUrl:'icons/Reclaim436.png',iconSize:[80,80],iconAnchor:[40,40] });
 
+const iconHome444 = L.icon({ iconUrl:'icons/Home444.png',iconSize:[48,48],iconAnchor:[24,24] });
 const iconTundish444 = L.icon({ iconUrl:'icons/Tundish444.png',iconSize:[96,96],iconAnchor:[44,44] });
 const iconReclaim444 = L.icon({ iconUrl:'icons/Reclaim444.png',iconSize:[80,80],iconAnchor:[40,40] });
 
@@ -120,6 +121,7 @@ const markerConfig = {
   "Tundish439": { icon: iconTundish439, displayName: "439 Tundish", group: "439 Materials" },
   "Reclaim439": { icon: iconReclaim439, displayName: "439 Reclaim", group: "439 Materials" },
 
+  "Home444": { icon: iconHome444, displayName: "444 Home", group: "444 Materials" },
   "Tundish444": { icon: iconTundish444, displayName: "444 Tundish", group: "444 Materials" },
   "Reclaim444": { icon: iconReclaim444, displayName: "444 Reclaim", group: "444 Materials" },
 
